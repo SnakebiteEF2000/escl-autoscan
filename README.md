@@ -449,7 +449,7 @@ PAPERLESS_CONSUMER_POLLING_INTERVAL=10    # inotify does not work on NFS; poll e
   capabilities.
 - **Content-Security-Policy.** The UI allows scripts, styles, images and
   requests from its own origin only, and nothing inline. Its one script
-  (`static/live.js`, about 80 lines, no library) fetches the page again every
+  (`static/live.js`, about 100 lines, no library) fetches the page again every
   two seconds and replaces the parts that changed. Without JavaScript the
   page works the same and reloads itself instead.
 

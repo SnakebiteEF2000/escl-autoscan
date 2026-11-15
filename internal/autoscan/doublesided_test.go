@@ -422,6 +422,7 @@ func TestShutdownSavesHeldFronts(t *testing.T) {
 func TestDoubleSidedByAutoscanAndTimeoutDuringSettle(t *testing.T) {
 	offset := &atomic.Int64{}
 	h := newHarness(t, func(c *Config) {
+		c.Settle = 500 * time.Millisecond // long enough to be seen on a slow machine
 		c.DoubleSidedTimeout = 30 * time.Minute
 		c.Now = func() time.Time { return time.Now().Add(time.Duration(offset.Load())) }
 	}, nil)

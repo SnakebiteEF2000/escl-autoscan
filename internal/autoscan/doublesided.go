@@ -129,7 +129,6 @@ func (s *Service) expireDoubleSided() {
 	files, err := s.write(s.out, fronts.docs, fronts.at, "")
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	switch {
 	case err == nil:
 		s.log.Info("double-sided fronts saved as a single-sided scan", "files", files, "pages", fronts.pages)
@@ -150,8 +149,11 @@ func (s *Service) expireDoubleSided() {
 		// A new run has started meanwhile and holds its own fronts.
 		s.log.Error("cannot save the double-sided fronts", "dir", s.out.Dir, "err", err)
 		s.m.DoubleSided(metrics.DoubleSidedTimeout)
-		s.keepFailed(fronts)
+		s.mu.Unlock()
+		s.keepFailed(fronts) // writes: not under the lock
+		return
 	}
+	s.mu.Unlock()
 }
 
 // saveFrontsAtShutdown saves held fronts before the process exits. If a
