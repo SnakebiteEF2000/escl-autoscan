@@ -55,14 +55,20 @@ func (s *Service) scan(ctx context.Context, source escl.InputSource, colorMode s
 	}
 
 	if result == metrics.ResultOK {
+		out, routed := s.deliveryTarget(source, len(docs))
+		prefix := ""
+		if routed {
+			prefix = s.cfg.DoubleSidedSubdir + "/"
+		}
 		for _, doc := range docs {
-			name, err := s.out.Write(doc, rec.Time, "")
+			name, err := out.Write(doc, rec.Time, "")
 			if err != nil {
 				rec.Result, rec.Message = metrics.ResultError, joinMsg(rec.Message, "write: "+err.Error())
 				break
 			}
-			rec.Files = append(rec.Files, name)
+			rec.Files = append(rec.Files, prefix+name)
 		}
+		rec.DoubleSided = routed && rec.Result == metrics.ResultOK
 		if rec.Result == metrics.ResultOK {
 			return rec
 		}

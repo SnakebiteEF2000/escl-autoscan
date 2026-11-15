@@ -21,6 +21,14 @@ const (
 	ResultSkipped       = "skipped"        // autoscan settle ended without a scan
 )
 
+// Double-sided outcomes, the "result" label of double_sided_total.
+const (
+	DoubleSidedDelivered = "delivered"
+	DoubleSidedTimeout   = "timeout"
+	DoubleSidedCancelled = "cancelled" // by the user
+	DoubleSidedFailed    = "failed"    // a pass failed
+)
+
 // Results lists all result label values.
 var Results = []string{ResultOK, ResultAborted, ResultIncompletePDF, ResultBusy, ResultError, ResultWakeGlitch, ResultSkipped}
 
@@ -37,6 +45,8 @@ type Metrics struct {
 	pages       prometheus.Counter
 	lastSuccess prometheus.Gauge
 	duration    prometheus.Histogram
+	dsState     prometheus.Gauge
+	dsTotal     *prometheus.CounterVec
 
 	mu     sync.Mutex
 	states map[string]bool // adf_state label values created so far
@@ -79,9 +89,20 @@ func New(reg prometheus.Registerer, knownAdfStates []string) *Metrics {
 			Help:    "Duration of scan jobs, from job creation to the last document.",
 			Buckets: []float64{5, 10, 20, 30, 45, 60, 90, 120, 180, 300, 600},
 		}),
+		dsState: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace, Name: "double_sided_state",
+			Help: "Double-sided mode: 0 off, 1 waiting for the fronts, 2 waiting for the backs.",
+		}),
+		dsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace, Name: "double_sided_total",
+			Help: "Finished double-sided runs by result.",
+		}, []string{"result"}),
 		states: map[string]bool{},
 	}
-	reg.MustRegister(m.up, m.adfState, m.armed, m.paused, m.scans, m.pages, m.lastSuccess, m.duration)
+	reg.MustRegister(m.up, m.adfState, m.armed, m.paused, m.scans, m.pages, m.lastSuccess, m.duration, m.dsState, m.dsTotal)
+	for _, r := range []string{DoubleSidedDelivered, DoubleSidedTimeout, DoubleSidedCancelled, DoubleSidedFailed} {
+		m.dsTotal.WithLabelValues(r)
+	}
 	for _, s := range knownAdfStates {
 		m.adfState.WithLabelValues(s).Set(0)
 		m.states[s] = true
@@ -128,6 +149,12 @@ func (m *Metrics) Scan(source, result string, pages int, d time.Duration, at tim
 		m.lastSuccess.Set(float64(at.Unix()))
 	}
 }
+
+// SetDoubleSidedState records the double-sided state (0, 1 or 2).
+func (m *Metrics) SetDoubleSidedState(state int) { m.dsState.Set(float64(state)) }
+
+// DoubleSided counts a finished double-sided run.
+func (m *Metrics) DoubleSided(result string) { m.dsTotal.WithLabelValues(result).Inc() }
 
 func b2f(b bool) float64 {
 	if b {

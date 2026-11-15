@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -55,6 +56,11 @@ type Config struct {
 	BusyBackoff   time.Duration // first wait between those retries, doubled each time
 	DeleteTimeout time.Duration // bound for the best-effort DELETE after a job
 	HistorySize   int
+
+	DoubleSidedSubdir  string        // DOUBLE_SIDED_SUBDIR below the output dir; empty: disabled
+	DoubleSidedTimeout time.Duration // DOUBLE_SIDED_TIMEOUT
+
+	Now func() time.Time // clock; time.Now when nil (tests)
 }
 
 func (c *Config) defaults() {
@@ -76,6 +82,12 @@ func (c *Config) defaults() {
 	if c.DeleteTimeout <= 0 {
 		c.DeleteTimeout = 10 * time.Second
 	}
+	if c.DoubleSidedTimeout <= 0 {
+		c.DoubleSidedTimeout = 30 * time.Minute
+	}
+	if c.Now == nil {
+		c.Now = time.Now
+	}
 	if c.HistorySize <= 0 {
 		c.HistorySize = 10
 	}
@@ -87,6 +99,7 @@ type Service struct {
 	dev    *escl.Client
 	out    *output.Writer
 	failed *output.Writer // nil: rejected scans are discarded
+	dsOut  *output.Writer // double-sided folder; nil: disabled
 	m      *metrics.Metrics
 	log    *slog.Logger
 	now    func() time.Time
@@ -98,16 +111,20 @@ type Service struct {
 	wg        sync.WaitGroup
 	described bool // capabilities logged; Run goroutine only
 
-	mu        sync.Mutex // guards everything below; it also serializes scans
-	status    statusView
-	armed     bool
-	paused    bool
-	settling  bool
-	scanning  *Current
-	stopping  bool
-	history   []Record
-	failures  int
-	lastState [2]string
+	mu       sync.Mutex // guards everything below; it also serializes scans
+	status   statusView
+	armed    bool
+	paused   bool
+	settling bool
+	scanning *Current
+	stopping bool
+	history  []Record
+
+	ds         int // DoubleSidedOff, ...Fronts, ...Backs
+	dsDeadline time.Time
+	dsNote     string // why the last double-sided run ended early
+	failures   int
+	lastState  [2]string
 }
 
 type statusView struct {
@@ -138,6 +155,9 @@ type Record struct {
 	Files    []string
 	Message  string
 	Duration time.Duration
+	// DoubleSided is set when the scan was delivered as one pass of a
+	// double-sided pair.
+	DoubleSided bool
 }
 
 // Snapshot is the state shown in the UI.
@@ -156,6 +176,11 @@ type Snapshot struct {
 	Scanning        *Current
 	ColorMode       string
 	History         []Record // newest first
+
+	DoubleSidedEnabled  bool
+	DoubleSided         int       // DoubleSidedOff, ...Fronts, ...Backs
+	DoubleSidedDeadline time.Time // when the current step expires
+	DoubleSidedNote     string
 }
 
 // New creates a service. failed may be nil.
@@ -163,9 +188,12 @@ func New(cfg Config, dev *escl.Client, out, failed *output.Writer, m *metrics.Me
 	cfg.defaults()
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{
-		cfg: cfg, dev: dev, out: out, failed: failed, m: m, log: log, now: time.Now,
+		cfg: cfg, dev: dev, out: out, failed: failed, m: m, log: log, now: cfg.Now,
 		jobCtx: ctx, jobCancel: cancel,
 		paused: cfg.Paused,
+	}
+	if cfg.DoubleSidedSubdir != "" {
+		s.dsOut = &output.Writer{Dir: filepath.Join(out.Dir, cfg.DoubleSidedSubdir), Location: out.Location, Log: out.Log}
 	}
 	m.SetPaused(s.paused)
 	m.SetArmed(false)
@@ -177,12 +205,16 @@ func New(cfg Config, dev *escl.Client, out, failed *output.Writer, m *metrics.Me
 func (s *Service) Snapshot() Snapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.expireDoubleSided()
 	snap := Snapshot{
 		Reachable: s.status.reachable, State: s.status.state, AdfState: s.status.adf,
 		Model: s.status.model, LastPoll: s.status.polled, LastError: s.status.err,
 		AutoscanEnabled: s.cfg.Enabled, Armed: s.armed, Paused: s.paused, Settling: s.settling,
 		ColorMode: s.cfg.ColorMode,
 		History:   make([]Record, len(s.history)),
+
+		DoubleSidedEnabled: s.dsOut != nil, DoubleSided: s.ds,
+		DoubleSidedDeadline: s.dsDeadline, DoubleSidedNote: s.dsNote,
 	}
 	if s.scanning != nil {
 		cur := *s.scanning
@@ -268,6 +300,7 @@ func (s *Service) poll(ctx context.Context) (time.Duration, bool) {
 		s.log.Info("scanner reachable again", "state", st.State, "adf", st.AdfState)
 	}
 	s.failures = 0
+	s.expireDoubleSided()
 	s.status.reachable, s.status.state, s.status.adf, s.status.err = true, st.State, st.AdfState, ""
 	s.m.SetUp(true)
 	s.m.SetAdfState(st.AdfState)
@@ -406,6 +439,7 @@ func (s *Service) start(source escl.InputSource, colorMode, trigger string) erro
 		defer s.wg.Done()
 		rec := s.scan(s.jobCtx, source, colorMode)
 		rec.Trigger = trigger
+		s.doubleSidedDone(source, rec.Result, rec.DoubleSided)
 		s.mu.Lock()
 		s.scanning = nil
 		s.mu.Unlock()
