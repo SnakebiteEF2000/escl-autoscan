@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	_ "time/tzdata" // TZ works in a distroless image without zoneinfo
 
 	"github.com/SnakebiteEF2000/escl-autoscan/internal/escltest"
 	"github.com/SnakebiteEF2000/escl-autoscan/internal/pdftest"

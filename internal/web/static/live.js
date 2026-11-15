@@ -36,6 +36,12 @@
     });
   }
 
+  function show(el, visible) {
+    if (el.hidden === visible) {
+      el.hidden = !visible;
+    }
+  }
+
   function schedule() {
     clearTimeout(timer);
     if (!document.hidden) {
@@ -59,11 +65,11 @@
       .then(function (html) {
         if (html !== null) {
           apply(html);
-          stale.hidden = true;
+          show(stale, false);
         }
       })
       .catch(function () {
-        stale.hidden = false;
+        show(stale, true);
       })
       .then(schedule);
   }
