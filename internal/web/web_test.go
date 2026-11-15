@@ -33,31 +33,41 @@ type fakeScanner struct {
 	busy   bool
 	paused bool
 	scans  []string
-	ds     int  // double-sided state
-	dsOn   bool // double-sided enabled
+	snap   func(*autoscan.Snapshot) // adjusts the snapshot
 }
 
 func (f *fakeScanner) StartDoubleSided(start bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if !f.dsOn {
-		return autoscan.ErrDoubleSidedDisabled
+	if f.busy {
+		return autoscan.ErrBusy
 	}
-	f.ds = 0
+	state := autoscan.DoubleSidedOff
 	if start {
-		f.ds = autoscan.DoubleSidedFronts
+		state = autoscan.DoubleSidedFronts
 	}
+	f.snap = func(s *autoscan.Snapshot) { s.DoubleSided = state }
 	return nil
 }
 
 func (f *fakeScanner) Snapshot() autoscan.Snapshot {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return autoscan.Snapshot{Reachable: true, State: "Idle", AdfState: "ScannerAdfEmpty", AutoscanEnabled: true,
-		Armed: true, Paused: f.paused, ColorMode: "Grayscale8",
-		DoubleSidedEnabled: f.dsOn, DoubleSided: f.ds, DoubleSidedDeadline: time.Now().Add(29 * time.Minute),
+	snap := autoscan.Snapshot{Reachable: true, State: "Idle", AdfState: "ScannerAdfEmpty", AutoscanEnabled: true,
+		Armed: true, Paused: f.paused, ColorMode: "Grayscale8", LastPoll: time.Now(), Settle: 10 * time.Second,
+		DoubleSidedDeadline: time.Now().Add(29*time.Minute + 30*time.Second),
 		History: []autoscan.Record{{Time: time.Unix(1_700_000_000, 0), Source: "feeder", Trigger: "auto", Pages: 3,
 			Result: "ok", Files: []string{"scan-20231114-221320.pdf"}}}}
+	if f.snap != nil {
+		f.snap(&snap)
+	}
+	return snap
+}
+
+func (f *fakeScanner) set(mod func(*autoscan.Snapshot)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.snap = mod
 }
 
 func (f *fakeScanner) Scan(src escl.InputSource, mode string) error {
@@ -358,7 +368,7 @@ func TestLoginFlowWithPKCE(t *testing.T) {
 		t.Errorf("busy scan: %d, want 409 with message", busy.StatusCode)
 	}
 	// The 409 page is served at /scan; its refresh must go to /, not GET /scan.
-	if !strings.Contains(string(busyBody), `content="30; url=/"`) {
+	if !strings.Contains(string(busyBody), `content="15; url=/"`) {
 		t.Errorf("busy page refresh does not target /")
 	}
 
@@ -647,35 +657,105 @@ func TestStringListClaim(t *testing.T) {
 }
 
 func TestDoubleSided(t *testing.T) {
-	noAuth := func(c *Config, _ string) { c.NoAuth = true }
-
-	off := newUI(t, noAuth)
-	if _, body := off.page(); strings.Contains(body, "/double-sided") {
-		t.Error("double-sided button shown although the feature is off")
-	}
-	if code := off.post("/double-sided", url.Values{"csrf": {off.csrf()}, "action": {"start"}}, off.URL).StatusCode; code != http.StatusNotFound {
-		t.Errorf("POST /double-sided with the feature off: %d, want 404", code)
-	}
-
-	on := newUIWith(t, &fakeScanner{dsOn: true}, noAuth)
-	_, body := on.page()
-	if !strings.Contains(body, `action="/double-sided"`) || !strings.Contains(body, "Double-sided: off") {
+	u := newUI(t, func(c *Config, _ string) { c.NoAuth = true })
+	_, body := u.page()
+	if !strings.Contains(body, `action="/double-sided"`) || !strings.Contains(body, "Start double-sided") {
 		t.Fatal("double-sided controls missing")
 	}
-	csrf := on.csrf()
-	if code := on.post("/double-sided", url.Values{"action": {"start"}}, on.URL).StatusCode; code != http.StatusForbidden {
+	csrf := u.csrf()
+	if code := u.post("/double-sided", url.Values{"action": {"start"}}, u.URL).StatusCode; code != http.StatusForbidden {
 		t.Errorf("POST without CSRF: %d, want 403", code)
 	}
-	if code := on.post("/double-sided", url.Values{"csrf": {csrf}, "action": {"start"}}, "https://evil.example.com").StatusCode; code != http.StatusForbidden {
+	if code := u.post("/double-sided", url.Values{"csrf": {csrf}, "action": {"start"}}, "https://evil.example.com").StatusCode; code != http.StatusForbidden {
 		t.Errorf("cross-origin POST: %d, want 403", code)
 	}
-	if code := on.post("/double-sided", url.Values{"csrf": {csrf}, "action": {"start"}}, on.URL).StatusCode; code != http.StatusSeeOther {
+	if code := u.post("/double-sided", url.Values{"csrf": {csrf}, "action": {"bogus"}}, u.URL).StatusCode; code != http.StatusBadRequest {
+		t.Errorf("unknown action: %d, want 400", code)
+	}
+	if code := u.post("/double-sided", url.Values{"csrf": {csrf}, "action": {"start"}}, u.URL).StatusCode; code != http.StatusSeeOther {
 		t.Fatalf("start: %d", code)
 	}
-	if _, body := on.page(); !strings.Contains(body, "insert the fronts (29 min left)") || !strings.Contains(body, `value="cancel"`) {
-		t.Errorf("status line after start missing:\n%s", body)
+	_, body = u.page()
+	for _, want := range []string{"Ready for the fronts", `<li class="current">`, "Put the stack into the feeder.", "30 min left", "Cancel double-sided"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("after start: %q missing", want)
+		}
 	}
-	if code := on.post("/double-sided", url.Values{"csrf": {csrf}, "action": {"cancel"}}, on.URL).StatusCode; code != http.StatusSeeOther {
+
+	// Fronts held: the second step is the current one, and cancelling says what it costs.
+	u.scanner.set(func(s *autoscan.Snapshot) {
+		s.DoubleSided, s.DoubleSidedFronts = autoscan.DoubleSidedBacks, 3
+		s.DoubleSidedNote = autoscan.Note{Kind: autoscan.NoteWarn, Text: "The scan of the backs failed (aborted)."}
+	})
+	_, body = u.page()
+	for _, want := range []string{"Ready for the backs", `<li class="done">`, "Done, 3 pages held.", "Turn it over without re-sorting",
+		"Cancel and discard the fronts", `<p class="note warn">The scan of the backs failed (aborted).</p>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("fronts held: %q missing", want)
+		}
+	}
+	if code := u.post("/double-sided", url.Values{"csrf": {csrf}, "action": {"cancel"}}, u.URL).StatusCode; code != http.StatusSeeOther {
 		t.Errorf("cancel: %d", code)
+	}
+
+	// While a feeder scan runs the mode cannot change.
+	u.scanner.setBusy(true)
+	if code := u.post("/double-sided", url.Values{"csrf": {csrf}, "action": {"start"}}, u.URL).StatusCode; code != http.StatusConflict {
+		t.Errorf("start during a feeder scan: %d, want 409", code)
+	}
+}
+
+// The page is kept current by static/live.js, which replaces the elements
+// marked data-live. The script must be allowed by the CSP and served, and
+// without JavaScript the page has to reload itself.
+func TestLiveUpdates(t *testing.T) {
+	u := newUI(t, func(c *Config, _ string) { c.NoAuth = true })
+	resp, err := u.client.Get(u.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	body := string(raw)
+	csp := resp.Header.Get("Content-Security-Policy")
+	for _, want := range []string{"default-src 'none'", "script-src 'self'", "connect-src 'self'"} {
+		if !strings.Contains(csp, want) {
+			t.Errorf("CSP %q lacks %q", csp, want)
+		}
+	}
+	if strings.Contains(csp, "unsafe") {
+		t.Errorf("CSP %q allows inline code", csp)
+	}
+	for _, want := range []string{
+		`<script src="/static/live.js" defer></script>`,
+		`<noscript><meta http-equiv="refresh" content="15; url=/"></noscript>`,
+		`data-live="status"`, `data-live="scan"`, `data-live="autoscan"`, `data-live="double-sided"`, `data-live="history"`,
+		`id="stale" hidden`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page lacks %s", want)
+		}
+	}
+	// No inline script or style: the CSP would block it.
+	if strings.Count(body, "<script") != 1 || strings.Contains(body, "<style") || regexp.MustCompile(`\s(style|on[a-z]+)=`).MatchString(body) {
+		t.Error("page contains inline script or style")
+	}
+	for path, typ := range map[string]string{"/static/live.js": "javascript", "/static/style.css": "text/css", "/static/icon.svg": "image/svg+xml"} {
+		resp := u.get(u.URL + path)
+		if resp.StatusCode != http.StatusOK || !strings.Contains(resp.Header.Get("Content-Type"), typ) {
+			t.Errorf("%s: %d %s", path, resp.StatusCode, resp.Header.Get("Content-Type"))
+		}
+	}
+
+	// A running scan disables the scan buttons and is announced at the top.
+	u.scanner.set(func(s *autoscan.Snapshot) {
+		s.Scanning = &autoscan.Current{Source: "feeder", Trigger: "auto", Started: time.Now().Add(-23 * time.Second)}
+	})
+	_, body = u.page()
+	for _, want := range []string{`<section class="hero busy" data-live="status">`, "Scanning the feeder", "Running for 23 s",
+		`value="feeder" disabled`, `content="3; url=/"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("while scanning: %q missing", want)
+		}
 	}
 }

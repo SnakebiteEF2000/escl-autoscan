@@ -23,10 +23,10 @@ const (
 
 // Double-sided outcomes, the "result" label of double_sided_total.
 const (
-	DoubleSidedDelivered = "delivered"
-	DoubleSidedTimeout   = "timeout"
-	DoubleSidedCancelled = "cancelled" // by the user
-	DoubleSidedFailed    = "failed"    // a pass failed
+	DoubleSidedDelivered = "delivered" // one collated document
+	DoubleSidedTimeout   = "timeout"   // the next pass did not arrive; held fronts were saved single-sided
+	DoubleSidedCancelled = "cancelled" // by the user; held fronts were discarded
+	DoubleSidedFailed    = "failed"    // the PDFs could not be collated and were delivered as they are
 )
 
 // Results lists all result label values.
@@ -78,7 +78,7 @@ func New(reg prometheus.Registerer, knownAdfStates []string) *Metrics {
 		}, []string{"source", "result"}),
 		pages: prometheus.NewCounter(prometheus.CounterOpts{
 			Namespace: namespace, Name: "pages_total",
-			Help: "Pages delivered to the output directory.",
+			Help: "Pages of successful scans.",
 		}),
 		lastSuccess: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: namespace, Name: "last_success_timestamp_seconds",
@@ -91,7 +91,7 @@ func New(reg prometheus.Registerer, knownAdfStates []string) *Metrics {
 		}),
 		dsState: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: namespace, Name: "double_sided_state",
-			Help: "Double-sided mode: 0 off, 1 waiting for the fronts, 2 waiting for the backs.",
+			Help: "Double-sided mode: 0 off, 1 waiting for the fronts, 2 holding the fronts and waiting for the backs.",
 		}),
 		dsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: namespace, Name: "double_sided_total",

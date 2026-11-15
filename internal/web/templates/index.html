@@ -1,8 +1,12 @@
-{{template "head" "Scanner"}}<meta http-equiv="refresh" content="{{.Refresh}}; url=/">
+{{template "head" "Scanner"}}<noscript><meta http-equiv="refresh" content="{{.Refresh}}; url=/"></noscript>
+<script src="/static/live.js" defer></script>
 </head>
 <body>
 <header>
-  <h1>Scanner</h1>
+  <div>
+    <h1>Scanner</h1>
+    <p class="muted small" data-live="model">{{.Snap.Model}}</p>
+  </div>
   {{if .Auth}}<form method="post" action="/auth/logout" class="user">
     <span>{{.User}}</span>
     <input type="hidden" name="csrf" value="{{.CSRF}}">
@@ -10,65 +14,81 @@
   </form>{{end}}
 </header>
 <main>
-{{if .Error}}<p class="banner error" role="alert">{{.Error}}</p>{{end}}
-{{with .Snap}}
-<section class="card">
-  <h2>Status</h2>
-  <dl>
-    <dt>Scanner</dt>
-    <dd>{{if .Reachable}}<span class="dot ok"></span>reachable{{else}}<span class="dot bad"></span>unreachable{{end}}{{if .Model}} · {{.Model}}{{end}}</dd>
-    <dt>State</dt><dd>{{if .State}}{{.State}}{{else}}–{{end}}</dd>
-    <dt>Feeder</dt><dd>{{if .AdfState}}{{.AdfState}}{{else}}–{{end}}</dd>
-    <dt>Autoscan</dt>
-    <dd>{{if not .AutoscanEnabled}}disabled{{else if .Paused}}<span class="dot warn"></span>paused{{else if .Armed}}<span class="dot ok"></span>armed, waiting for paper{{else}}<span class="dot warn"></span>waiting for an empty feeder{{end}}{{if .Settling}} · paper detected, scanning shortly{{end}}</dd>
-    <dt>Now</dt><dd>{{with .Scanning}}scanning {{.Source}} ({{.Trigger}}) since {{fmtTime .Started}}{{else}}idle{{end}}</dd>
-    {{if .LastError}}<dt>Last error</dt><dd class="muted">{{.LastError}}</dd>{{end}}
+{{if .Error}}<p class="note warn" role="alert">{{.Error}}</p>{{end}}
+<p class="note warn" id="stale" hidden>No connection to escl-autoscan. This page is not up to date.</p>
+
+<section class="hero {{.Hero.Tone}}" data-live="status">
+  <h2>{{.Hero.Title}}</h2>
+  {{if .Hero.Detail}}<p>{{.Hero.Detail}}</p>{{end}}
+  <dl class="facts">
+    <div><dt>Scanner</dt><dd>{{if not .Snap.Reachable}}not reachable{{else if .Snap.State}}{{.Snap.State}}{{else}}unknown{{end}}</dd></div>
+    <div><dt>Feeder</dt><dd title="{{.Snap.AdfState}}">{{.Feeder}}</dd></div>
+    <div><dt>Autoscan</dt><dd>{{if not .Snap.AutoscanEnabled}}off{{else if .Snap.Paused}}paused{{else}}on{{end}}</dd></div>
   </dl>
+  {{if .Snap.LastError}}<p class="muted small">Last error: {{.Snap.LastError}}</p>{{end}}
 </section>
-{{end}}
+
 <section class="card">
   <h2>Scan</h2>
-  <form method="post" action="/scan" class="controls">
+  <form method="post" action="/scan">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
-    <fieldset>
-      <legend>Mode</legend>
-      <label><input type="radio" name="color" value="gray"{{if .Gray}} checked{{end}}> Gray</label>
-      <label><input type="radio" name="color" value="color"{{if not .Gray}} checked{{end}}> Color</label>
-    </fieldset>
-    <div class="buttons">
+    <div class="segmented" role="radiogroup" aria-label="Color mode">
+      <label><input type="radio" name="color" value="gray"{{if .Gray}} checked{{end}}><span>Gray</span></label>
+      <label><input type="radio" name="color" value="color"{{if not .Gray}} checked{{end}}><span>Color</span></label>
+    </div>
+    <div class="buttons" data-live="scan">
       <button type="submit" name="source" value="feeder"{{if .Snap.Scanning}} disabled{{end}}>Scan feeder</button>
-      <button type="submit" name="source" value="platen"{{if .Snap.Scanning}} disabled{{end}}>Scan flatbed</button>
+      <button type="submit" name="source" value="platen" class="secondary"{{if .Snap.Scanning}} disabled{{end}}>Scan flatbed</button>
     </div>
   </form>
-  {{if .Snap.DoubleSidedEnabled}}<form method="post" action="/double-sided" class="pause">
+  {{if .Snap.AutoscanEnabled}}<form method="post" action="/pause" class="row" data-live="autoscan">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
-    <p>{{if eq .Snap.DoubleSided 1}}<span class="dot warn"></span>Double-sided: insert the fronts ({{.DSRemaining}} left).
-    {{else if eq .Snap.DoubleSided 2}}<span class="dot warn"></span>Fronts saved — turn the stack over (as it came out, do not re-sort) and put it into the feeder again ({{.DSRemaining}} left).
-    {{else}}Double-sided: off{{end}}</p>
-    {{if .Snap.DoubleSidedNote}}<p class="banner error">{{.Snap.DoubleSidedNote}}</p>{{end}}
-    {{if .Snap.DoubleSided}}<button type="submit" name="action" value="cancel" class="secondary">Cancel double-sided</button>
-    {{else}}<button type="submit" name="action" value="start" class="secondary">Double-sided</button>{{end}}
-  </form>{{end}}
-  {{if .Snap.AutoscanEnabled}}<form method="post" action="/pause" class="pause">
-    <input type="hidden" name="csrf" value="{{.CSRF}}">
-    {{if .Snap.Paused}}<button type="submit" name="action" value="resume" class="secondary">Resume autoscan</button>
-    {{else}}<button type="submit" name="action" value="pause" class="secondary">Pause autoscan</button>{{end}}
+    {{if .Snap.Paused}}<p>Autoscan is paused.</p>
+    <button type="submit" name="action" value="resume" class="secondary">Resume autoscan</button>
+    {{else}}<p>Autoscan is on: paper in the feeder is scanned by itself.</p>
+    <button type="submit" name="action" value="pause" class="secondary">Pause autoscan</button>{{end}}
   </form>{{end}}
 </section>
+
+<section class="card" data-live="double-sided">
+  <h2>Double-sided</h2>
+  {{with .Snap.DoubleSidedNote}}{{if .Text}}<p class="note {{.Kind}}">{{.Text}}</p>{{end}}{{end}}
+  {{if eq .Snap.DoubleSided 0}}<p>For a stack printed on both sides: scan the fronts, turn the stack over and scan the backs. The result is one PDF with the pages in order.</p>
+  {{else}}<ol class="steps">
+    <li class="{{if eq .Snap.DoubleSided 1}}current{{else}}done{{end}}">
+      <strong>Scan the fronts</strong>
+      {{if eq .Snap.DoubleSided 1}}<p>Put the stack into the feeder{{if not .Auto}} and press Scan feeder{{end}}.</p>
+      {{else}}<p>Done, {{pageCount .Snap.DoubleSidedFronts}} held.</p>{{end}}
+    </li>
+    <li{{if eq .Snap.DoubleSided 2}} class="current"{{end}}>
+      <strong>Turn the stack over and scan the backs</strong>
+      {{if eq .Snap.DoubleSided 2}}<p>Take the stack out of the output tray as it is. Turn it over without re-sorting it and put it back into the feeder{{if not .Auto}}, then press Scan feeder{{end}}.</p>{{end}}
+    </li>
+  </ol>
+  <p class="muted small">{{.DSRemaining}} left for this step.{{if eq .Snap.DoubleSided 2}} After that the fronts are saved as a single-sided scan.{{end}}</p>{{end}}
+  <form method="post" action="/double-sided">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    {{if eq .Snap.DoubleSided 0}}<button type="submit" name="action" value="start" class="secondary"{{if .FeederBusy}} disabled{{end}}>Start double-sided</button>
+    {{else}}<button type="submit" name="action" value="cancel" class="secondary"{{if .FeederBusy}} disabled{{end}}>{{if eq .Snap.DoubleSided 2}}Cancel and discard the fronts{{else}}Cancel double-sided{{end}}</button>{{end}}
+  </form>
+</section>
+
 <section class="card">
   <h2>Recent scans</h2>
-  {{if .Snap.History}}<div class="table"><table>
-    <thead><tr><th>Time</th><th>Source</th><th>Pages</th><th>Result</th><th>File</th></tr></thead>
-    <tbody>
-    {{range .Snap.History}}<tr>
-      <td>{{fmtTime .Time}}</td>
-      <td>{{.Source}} <span class="muted">{{.Trigger}}</span></td>
-      <td>{{if .Pages}}{{.Pages}}{{else}}–{{end}}</td>
-      <td><span class="result {{.Result}}">{{.Result}}</span>{{if .Message}}<div class="muted small">{{.Message}}</div>{{end}}</td>
-      <td class="file">{{range .Files}}<div>{{.}}</div>{{else}}–{{end}}</td>
-    </tr>{{end}}
-    </tbody>
-  </table></div>{{else}}<p class="muted">No scans yet.</p>{{end}}
+  <div data-live="history">
+  {{if .Snap.History}}<ol class="scans">
+    {{range .Snap.History}}<li>
+      <div class="line">
+        <time datetime="{{stamp .Time}}">{{when .Time}}</time>
+        <span>{{sourceName .Source}} <span class="muted">{{.Trigger}}</span></span>
+        {{if .Pages}}<span>{{pageCount .Pages}}</span>{{end}}
+        <span class="result {{.Result}}">{{resultLabel .}}</span>
+      </div>
+      {{range .Files}}<div class="file">{{.}}</div>{{end}}
+      {{if .Message}}<div class="muted small">{{.Message}}</div>{{end}}
+    </li>{{end}}
+  </ol>{{else}}<p class="muted">No scans yet.</p>{{end}}
+  </div>
 </section>
 </main>
 </body>
