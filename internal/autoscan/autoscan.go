@@ -106,7 +106,8 @@ type Service struct {
 	jobCtx    context.Context
 	jobCancel context.CancelFunc
 	wg        sync.WaitGroup
-	described bool // capabilities logged; Run goroutine only
+	described bool          // capabilities logged; Run goroutine only
+	pollNow   chan struct{} // asks Run for a status poll at once
 
 	mu       sync.Mutex // guards everything below; it also serializes scans
 	status   statusView
@@ -192,7 +193,7 @@ func New(cfg Config, dev *escl.Client, out, failed *output.Writer, m *metrics.Me
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{
 		cfg: cfg, dev: dev, out: out, failed: failed, m: m, log: log, now: cfg.Now,
-		jobCtx: ctx, jobCancel: cancel,
+		jobCtx: ctx, jobCancel: cancel, pollNow: make(chan struct{}, 1),
 		paused: cfg.Paused,
 	}
 	m.SetPaused(s.paused)
@@ -267,6 +268,8 @@ func (s *Service) Run(ctx context.Context) {
 		case <-settleC:
 			settleC = nil
 			s.settled(ctx)
+			poll.Reset(0)
+		case <-s.pollNow:
 			poll.Reset(0)
 		}
 	}
@@ -447,6 +450,12 @@ func (s *Service) start(source escl.InputSource, colorMode, trigger string) erro
 		s.scanning = nil
 		s.mu.Unlock()
 		s.record(rec, rec.Duration)
+		// The last status is from the middle of the scan. Poll again at
+		// once: the UI is current, and an empty feeder re-arms autoscan.
+		select {
+		case s.pollNow <- struct{}{}:
+		default:
+		}
 	}()
 	return nil
 }
