@@ -91,7 +91,7 @@ func serve(cfg *config, log *slog.Logger) error {
 
 	var failed *output.Writer
 	if cfg.FailedDir != "" {
-		failed = &output.Writer{Dir: cfg.FailedDir, Location: cfg.location}
+		failed = &output.Writer{Dir: cfg.FailedDir, Location: cfg.location, Log: log}
 	}
 	svc := autoscan.New(autoscan.Config{
 		PollInterval:   cfg.PollInterval,
@@ -103,7 +103,7 @@ func serve(cfg *config, log *slog.Logger) error {
 		Resolution:     cfg.ScanResolution,
 		Region:         escl.Region{XOffset: cfg.ScanXOffset, Width: cfg.ScanWidth, Height: cfg.ScanHeight},
 		WakeWorkaround: cfg.WakeWorkaround,
-	}, dev, &output.Writer{Dir: cfg.OutputDir, Location: cfg.location}, failed, m, log)
+	}, dev, &output.Writer{Dir: cfg.OutputDir, Location: cfg.location, Log: log}, failed, m, log)
 
 	var ui *web.Server
 	if cfg.UIEnabled {

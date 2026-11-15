@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,7 @@ const FileMode fs.FileMode = 0o644
 type Writer struct {
 	Dir      string         // OUTPUT_DIR
 	Location *time.Location // time zone for file names; UTC when nil
+	Log      *slog.Logger   // optional
 }
 
 // Write stores data as scan-YYYYMMDD-HHMMSS[-N][-suffix].pdf and returns the
@@ -83,8 +85,10 @@ func (w *Writer) Write(data []byte, at time.Time, suffix string) (string, error)
 		return "", fmt.Errorf("rename to %s: %w", name, err)
 	}
 	ok = true
-	if err := syncDir(w.Dir); err != nil {
-		return name, err
+	// The file is complete and visible now; a failed sync only weakens
+	// durability across a crash, so it must not turn the scan into a failure.
+	if err := syncDir(w.Dir); err != nil && w.Log != nil {
+		w.Log.Warn("directory sync after rename failed", "dir", w.Dir, "err", err)
 	}
 	return name, nil
 }
