@@ -335,6 +335,24 @@ func TestJamNeverDelivers(t *testing.T) {
 		h.eventually("re-armed", h.armed)
 	})
 
+	t.Run("feeder reports empty mid-job, then jams", func(t *testing.T) {
+		h := newHarness(t, nil, nil)
+		h.eventually("armed", h.armed)
+		// Between sheets the sensor may report an empty feeder.
+		h.fake.OnCreate(func(s *escltest.Server, _ *escltest.Job) { s.SetStatus("Processing", "ScannerAdfEmpty") })
+		h.fake.QueueJob(escltest.Step{Body: truncated, Delay: 10 * settle, Before: jam}, escltest.Step{Code: 410})
+		h.fake.SetStatus("Idle", "ScannerAdfLoaded")
+		if rec := h.waitRecords(1)[0]; rec.Result != metrics.ResultAborted {
+			t.Fatalf("record = %+v", rec)
+		}
+		// The jam is cleared and the rest of the stack is still in the feeder.
+		h.fake.SetStatus("Idle", "ScannerAdfLoaded")
+		time.Sleep(5 * settle)
+		if n := len(h.fake.Jobs()); n != 1 || h.armed() {
+			t.Fatalf("remaining stack scanned automatically: %d jobs, armed=%v", n, h.armed())
+		}
+	})
+
 	t.Run("complete-looking PDF from an aborted job", func(t *testing.T) {
 		h := newHarness(t, nil, nil)
 		h.eventually("armed", h.armed)

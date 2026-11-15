@@ -46,7 +46,10 @@ The service polls `GET /eSCL/ScannerStatus` every `POLL_INTERVAL`:
   panel (`Processing`) or took the paper out, the attempt is skipped.
 - **Re-arming.** After any attempt, successful or not, autoscan re-arms only
   after the feeder has reported empty again. A stack is never scanned twice,
-  and after a jam the feeder must be cleared first. The service starts
+  and after a jam the feeder must be cleared first. Only "empty" reports
+  between scans count: the feeder may look empty between two sheets of a
+  running job. A stack put in while a scan is still running therefore needs
+  to be taken out and put back. The service starts
   disarmed, so a stack that is already in the feeder at startup is not
   scanned automatically. Remove and reinsert it, or press "Scan feeder".
 - **Sleeping printer.** While the scanner is unreachable (asleep or off), the

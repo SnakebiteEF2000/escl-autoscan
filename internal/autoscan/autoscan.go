@@ -276,7 +276,9 @@ func (s *Service) poll(ctx context.Context) (time.Duration, bool) {
 		s.lastState = cur
 	}
 
-	if escl.AdfIsEmpty(st.AdfState) && !s.armed {
+	// Arm only between scans: the feeder may report empty between sheets
+	// of a running job, and a job that then jams leaves paper behind.
+	if escl.AdfIsEmpty(st.AdfState) && !s.armed && s.scanning == nil {
 		s.setArmed(true, "feeder empty")
 	}
 	start := s.cfg.Enabled && s.armed && !s.paused && !s.settling && s.scanning == nil && !s.stopping &&
