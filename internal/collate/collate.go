@@ -1,5 +1,6 @@
-// Package collate turns the two single-sided passes of a double-sided scan
-// into one PDF.
+// Package collate makes one PDF out of several scans: the two single-sided
+// passes of a double-sided stack (Interleave), or pages scanned one by one on
+// the flatbed (Join).
 //
 // A feeder that scans one side only is used twice: first for the fronts,
 // then, with the whole stack turned over, for the backs. Turning the stack
@@ -81,17 +82,47 @@ func Interleave(fronts, backs [][]byte) (pdf []byte, pages int, err error) {
 	if len(fronts) == 0 || len(backs) == 0 {
 		return nil, 0, errors.New("collate: missing pass")
 	}
+	docs := append(append([][]byte{}, fronts...), backs...)
+	return assemble(docs, len(fronts), func(n, total int) ([]int, error) {
+		m := total - n
+		if n != m {
+			return nil, &PageCountError{Fronts: n, Backs: m}
+		}
+		order := make([]int, 0, total)
+		for i := 1; i <= n; i++ {
+			order = append(order, i, total+1-i)
+		}
+		return order, nil
+	})
+}
+
+// Join merges docs into one PDF with the pages in the order given, e.g. the
+// pages of a document scanned one by one on the flatbed.
+func Join(docs [][]byte) (pdf []byte, pages int, err error) {
+	defer recovered(&err)
+	if len(docs) == 0 {
+		return nil, 0, errors.New("collate: no documents")
+	}
+	return assemble(docs, len(docs), func(_, total int) ([]int, error) {
+		order := make([]int, total)
+		for i := range order {
+			order[i] = i + 1
+		}
+		return order, nil
+	})
+}
+
+// assemble reads docs into one page sequence and writes the pages that order
+// selects. order gets the page count of the first split documents and of all
+// of them; page numbers start at 1.
+func assemble(docs [][]byte, split int, order func(first, total int) ([]int, error)) ([]byte, int, error) {
 	c := context.Background()
 	conf := config()
 	conf.Cmd = model.MERGECREATE
 
-	// All documents into one context: fronts 1..n, then backs n+1..n+m.
 	var dest *model.Context
-	n := 0
-	for i, doc := range append(append([][]byte{}, fronts...), backs...) {
-		if i == len(fronts) {
-			n = dest.PageCount
-		}
+	first, size := 0, 0
+	for i, doc := range docs {
 		src, err := api.ReadAndValidate(c, bytes.NewReader(doc), conf)
 		if err != nil {
 			return nil, 0, fmt.Errorf("collate: document %d: %w", i+1, err)
@@ -99,36 +130,26 @@ func Interleave(fronts, backs [][]byte) (pdf []byte, pages int, err error) {
 		if dest == nil {
 			dest = src
 			dest.EnsureVersionForWriting()
-			continue
-		}
-		if err := pdfcpu.MergeXRefTables(c, "", src, dest, false, false); err != nil {
+		} else if err := pdfcpu.MergeXRefTables(c, "", src, dest, false, false); err != nil {
 			return nil, 0, fmt.Errorf("collate: document %d: %w", i+1, err)
 		}
+		if i == split-1 {
+			first = dest.PageCount
+		}
+		size += len(doc)
 	}
-	m := dest.PageCount - n
-	if n != m {
-		return nil, 0, &PageCountError{Fronts: n, Backs: m}
+	pages, err := order(first, dest.PageCount)
+	if err != nil {
+		return nil, 0, err
 	}
-
-	order := make([]int, 0, n+m)
-	for i := 1; i <= n; i++ {
-		order = append(order, i, n+m+1-i)
-	}
-	out, err := pdfcpu.ExtractPages(c, dest, order, false)
+	out, err := pdfcpu.ExtractPages(c, dest, pages, false)
 	if err != nil {
 		return nil, 0, fmt.Errorf("collate: %w", err)
 	}
 	var buf bytes.Buffer
-	size := 0
-	for _, doc := range fronts {
-		size += len(doc)
-	}
-	for _, doc := range backs {
-		size += len(doc)
-	}
 	buf.Grow(size + size/64 + 64<<10) // the result is about as large as the input
 	if err := api.WriteContext(c, out, &buf); err != nil {
 		return nil, 0, fmt.Errorf("collate: %w", err)
 	}
-	return buf.Bytes(), n + m, nil
+	return buf.Bytes(), len(pages), nil
 }

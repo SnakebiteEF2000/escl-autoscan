@@ -192,6 +192,37 @@ func TestInterleaveSurvivesAPdfcpuPanic(t *testing.T) {
 	}
 }
 
+// Join keeps the order of the scans: pages of a flatbed document.
+func TestJoin(t *testing.T) {
+	image := pdftest.Options{Pages: 2, Width: 300, Image: []byte("\xff\xd8 glass \xff\xd9"), Inherit: true}
+	out, pages, err := Join([][]byte{
+		pdftest.New(pdftest.Options{Pages: 1, Width: 100}),
+		pdftest.New(pdftest.Options{Pages: 1, Width: 200, XRefStream: true}),
+		pdftest.New(image),
+		pdftest.New(pdftest.Options{Pages: 1, Width: 400, Compact: true}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fmt.Sprint(widths(t, out)), "[100 200 300 300 400]"; got != want || pages != 5 {
+		t.Errorf("pages = %d, order %s, want 5, %s", pages, got, want)
+	}
+	for page := 1; page <= 2; page++ {
+		if n := bytes.Count(out, image.ImageData(page)); n != 1 {
+			t.Errorf("image %q found %d times, want once", image.ImageData(page), n)
+		}
+	}
+	if n, err := output.ValidatePDF(out); err != nil || n != 5 {
+		t.Errorf("ValidatePDF = %d, %v", n, err)
+	}
+	if _, _, err := Join(nil); err == nil {
+		t.Error("Join accepted no documents")
+	}
+	if _, _, err := Join([][]byte{pdftest.New(pdftest.Options{Pages: 1}), []byte("%PDF-1.4\nnot a PDF\n%%EOF\n")}); err == nil {
+		t.Error("Join accepted an unreadable document")
+	}
+}
+
 func TestInterleavePageCountMismatch(t *testing.T) {
 	_, _, err := Interleave(
 		[][]byte{pdftest.New(pdftest.Options{Pages: 3})},
