@@ -200,7 +200,9 @@ What happens when something goes wrong:
 - **Cancel** ends the mode and discards held fronts; the button says so.
 - **Timeout** (`DOUBLE_SIDED_TIMEOUT`, 30 minutes per step) and **shutdown**
   never discard: held fronts are saved as a normal single-sided scan. You
-  may have walked away believing the document was scanned.
+  may have walked away believing the document was scanned. If `OUTPUT_DIR`
+  cannot be written at that moment, they go to `FAILED_DIR`, like any scan
+  that cannot be delivered.
 - **The PDFs cannot be collated**: pdfcpu reads and rewrites the scanner's
   PDFs. If it cannot read one, the scan is not lost: the fronts are checked
   when they arrive and delivered as a normal scan if they are unreadable,
