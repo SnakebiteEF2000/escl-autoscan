@@ -120,8 +120,8 @@ type Service struct {
 
 	ds         int // DoubleSidedOff, ...Fronts, ...Backs
 	dsDeadline time.Time
-	dsNote     Note        // what happened last in double-sided mode
-	dsFronts   *frontsPass // the held fronts; set exactly in DoubleSidedBacks
+	dsNote     Note       // what happened last in double-sided mode
+	dsHeld     *heldPages // the fronts in DoubleSidedBacks, the pages so far in DoubleSidedFlatbed
 	failures   int
 	lastState  [2]string
 }
@@ -141,9 +141,10 @@ type Current struct {
 	Trigger string // "auto" or "manual"
 	Color   string
 	Started time.Time
-	// Pass is the role of a feeder scan in a double-sided run:
-	// DoubleSidedFronts, DoubleSidedBacks, or DoubleSidedOff for a normal
-	// scan. It is fixed when the scan starts.
+	// Pass is the role of the scan in a double-sided run: DoubleSidedFronts
+	// or DoubleSidedBacks for a feeder scan, DoubleSidedFlatbed for a
+	// flatbed scan, DoubleSidedOff for a normal scan. It is fixed when the
+	// scan starts.
 	Pass int
 }
 
@@ -158,8 +159,9 @@ type Record struct {
 	Files    []string
 	Message  string
 	Duration time.Duration
-	// DoubleSided is set when the scan became one pass of a double-sided
-	// document: fronts that are held, or backs collated with them.
+	// DoubleSided is set when the scan became part of a document made of
+	// several scans: fronts or flatbed pages that are held, or backs
+	// collated with their fronts.
 	DoubleSided bool
 }
 
@@ -181,9 +183,9 @@ type Snapshot struct {
 	ColorMode       string
 	History         []Record // newest first
 
-	DoubleSided         int       // DoubleSidedOff, ...Fronts, ...Backs
+	DoubleSided         int       // DoubleSidedOff, ...Fronts, ...Backs, ...Flatbed
 	DoubleSidedDeadline time.Time // when the current step expires
-	DoubleSidedFronts   int       // pages of the held fronts
+	DoubleSidedHeld     int       // pages held: the fronts, or the flatbed pages so far
 	DoubleSidedNote     Note
 }
 
@@ -215,8 +217,8 @@ func (s *Service) Snapshot() Snapshot {
 
 		DoubleSided: s.ds, DoubleSidedDeadline: s.dsDeadline, DoubleSidedNote: s.dsNote,
 	}
-	if s.dsFronts != nil {
-		snap.DoubleSidedFronts = s.dsFronts.pages
+	if s.dsHeld != nil {
+		snap.DoubleSidedHeld = s.dsHeld.pages
 	}
 	if s.scanning != nil {
 		cur := *s.scanning
@@ -436,7 +438,11 @@ func (s *Service) start(source escl.InputSource, colorMode, trigger string) erro
 	if source == escl.Feeder {
 		// Whatever happens, this stack is done; wait for an empty feeder.
 		s.setArmed(false, "scan started")
-		cur.Pass = s.ds
+	}
+	if (source == escl.Platen) == (s.ds == DoubleSidedFlatbed) {
+		cur.Pass = s.ds // the scan takes part in the run from its source
+	}
+	if cur.Pass != DoubleSidedOff || s.ds == DoubleSidedOff {
 		s.dsNote = Note{} // it was about an earlier scan
 	}
 	s.scanning = cur
@@ -460,6 +466,7 @@ func (s *Service) start(source escl.InputSource, colorMode, trigger string) erro
 	return nil
 }
 
+// record counts a finished scan, logs it and puts it into the history.
 func (s *Service) record(r Record, d time.Duration) {
 	s.m.Scan(r.Source, r.Result, r.Pages, d, r.Time)
 	attrs := []any{"source", r.Source, "trigger", r.Trigger, "result", r.Result, "pages", r.Pages,
@@ -473,6 +480,11 @@ func (s *Service) record(r Record, d time.Duration) {
 	default:
 		s.log.Warn("scan failed", attrs...)
 	}
+	s.remember(r)
+}
+
+// remember puts an entry into the history shown in the UI.
+func (s *Service) remember(r Record) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.history = append(s.history, r)
@@ -483,9 +495,9 @@ func (s *Service) record(r Record, d time.Duration) {
 
 // Shutdown stops starting new scans and waits up to timeout for a running
 // scan. After that the job is cancelled, which deletes it on the device.
-// Fronts held for a double-sided document are saved as a normal scan.
+// What is held for a double-sided document is saved.
 func (s *Service) Shutdown(timeout time.Duration) {
-	defer s.saveFrontsAtShutdown()
+	defer s.saveHeldAtShutdown()
 	s.mu.Lock()
 	s.stopping = true
 	running := s.scanning != nil

@@ -12,7 +12,7 @@ import (
 )
 
 // scan runs one scan job end to end and delivers or rejects the result.
-// pass is the role of a feeder scan in a double-sided run.
+// pass is the role of the scan in a double-sided run.
 func (s *Service) scan(ctx context.Context, source escl.InputSource, colorMode string, pass int) Record {
 	rec := Record{Time: s.now(), Source: sourceLabel(source), Color: colorMode}
 	settings := escl.ScanSettings{
@@ -64,6 +64,8 @@ func (s *Service) scan(ctx context.Context, source escl.InputSource, colorMode s
 		s.holdFronts(&rec, docs)
 	case pass == DoubleSidedBacks:
 		s.collateBacks(&rec, docs)
+	case pass == DoubleSidedFlatbed:
+		s.holdPage(&rec, docs)
 	default:
 		s.deliver(&rec, docs)
 	}

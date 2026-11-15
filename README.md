@@ -12,7 +12,8 @@ It also serves a small web page, behind OpenID Connect login. The page says
 what the scanner is doing right now and what to do next, and updates itself
 every two seconds. It has buttons to scan from the feeder or the flatbed, a
 gray/color choice, pause/resume, and a [double-sided](#double-sided-originals)
-mode for feeders that scan one side only. It is made for a phone held next to
+mode: both sides of a stack from a feeder that scans one side only, or page
+after page from the flatbed, as one PDF. It is made for a phone held next to
 the scanner. Prometheus metrics are on a separate port.
 
 The first target device is the Epson WorkForce WF-2960 (eSCL 2.9). Any eSCL
@@ -88,9 +89,10 @@ The service polls `GET /eSCL/ScannerStatus` every `POLL_INTERVAL`:
    discarded if it is unset. They never go to `OUTPUT_DIR`.
 7. `DELETE` the job. This is best effort; 404 is normal.
 
-In [double-sided](#double-sided-originals) mode, step 5 differs: the fronts
-are held in memory, and when the backs have passed steps 1 to 4 as well, both
-are collated into one PDF, which is validated and delivered like any other.
+In [double-sided](#double-sided-originals) mode, step 5 differs: scans that
+passed steps 1 to 4 are held in memory until the document is complete (the
+backs have arrived, or the flatbed document is saved). Then they become one
+PDF, which is validated and delivered like any other.
 
 On SIGTERM no new scan starts. A running scan may finish for up to 60s; after
 that its job is cancelled and deleted on the device.
@@ -121,7 +123,7 @@ them all.
 | `SCAN_HEIGHT` | `3508` | Scan height in 1/300 inch (3508 = A4, 3300 = Letter). |
 | `SCAN_X_OFFSET` | `0` | Horizontal offset in 1/300 inch. |
 | `OUTPUT_DIR` | *(required)* | Where finished PDFs go, e.g. `<consume>/scanner`. |
-| `DOUBLE_SIDED_TIMEOUT` | `30m` | [Double-sided](#double-sided-originals) mode ends if the next pass does not arrive in time. The time starts again with every step and after a failed pass. Fronts that are already scanned are then saved as a single-sided scan. |
+| `DOUBLE_SIDED_TIMEOUT` | `30m` | [Double-sided](#double-sided-originals) mode ends if the next scan does not arrive in time. The time starts again with every step, every flatbed page and after a failed scan. What is already scanned is then saved: fronts as a single-sided scan, flatbed pages as one document. |
 | `FAILED_DIR` | *(discard)* | Keep rejected and partial scans here. Must be outside `OUTPUT_DIR` and `BACKLOG_DIR`; this is checked at startup. |
 | `BACKLOG_DIR` | | Paperless consume root. Enables the backlog metrics. |
 | `TZ` | `UTC` | Time zone for file names and the UI, e.g. `Europe/Berlin`. The zone database is built in. |
@@ -161,8 +163,8 @@ All metrics are on `METRICS_ADDR` with the prefix `escl_autoscan_`:
 | `pages_total` | Pages of successful scans. Each pass of a double-sided scan counts its own pages. |
 | `last_success_timestamp_seconds` | Time of the last successful scan. Fronts held for a double-sided scan count. |
 | `scan_duration_seconds` | Histogram of job durations. |
-| `double_sided_state` | 0 off, 1 waiting for the fronts, 2 holding the fronts and waiting for the backs. |
-| `double_sided_total{result}` | Finished double-sided runs: `delivered` (one collated PDF), `timeout` (held fronts were saved single-sided), `cancelled` (by the user; held fronts were discarded) or `failed` (the PDFs could not be collated and were delivered as they are). |
+| `double_sided_state` | 0 off, 1 waiting for the fronts, 2 holding the fronts and waiting for the backs, 3 collecting the pages of a flatbed document. |
+| `double_sided_total{result}` | Finished double-sided runs, from the feeder or the flatbed: `delivered` (one PDF), `timeout` (what was held was saved), `cancelled` (by the user; what was held was discarded) or `failed` (the PDFs could not be combined and were delivered as they are). |
 | `backlog_files`, `backlog_oldest_age_seconds` | Only with `BACKLOG_DIR`. Counts consumable files (`.pdf .png .jpg .jpeg .tif .tiff .webp .txt .eml`) below the consume root, every 60s. `.part` files and dotfiles are ignored. A growing age means Paperless is not consuming. |
 
 `/healthz` reports that the process is alive. `/readyz` checks that
@@ -171,11 +173,16 @@ printer is normal.
 
 ## Double-sided originals
 
-The WF-2960 feeder scans one side only. Double-sided mode scans a stack
-twice, fronts and then backs, and delivers **one PDF** with the pages in
-order. Paperless sees a normal document; it needs no setting for this.
+Double-sided mode delivers **one PDF** made of several scans, with the pages
+in order. Paperless sees a normal document; it needs no setting for this.
+There are two ways, and one document at a time.
 
-1. Press **Start double-sided**. The page shows the two steps.
+### From the feeder
+
+The WF-2960 feeder scans one side only, so a stack is scanned twice, fronts
+and then backs.
+
+1. Press **From the feeder**. The page shows the two steps.
 2. Put the stack into the feeder. The next successful feeder scan, automatic
    or via "Scan feeder", is the fronts. They are held in memory; nothing is
    written yet.
@@ -188,8 +195,28 @@ order. Paperless sees a normal document; it needs no setting for this.
    them in reverse order and puts each behind its front. The PDF goes to
    `OUTPUT_DIR` like any other scan, and the mode switches off.
 
-What happens when something goes wrong:
+### From the flatbed
 
+On the glass a document is scanned page after page, both sides of each sheet
+in reading order. Nothing has to be re-sorted; the pages are joined in the
+order they were scanned. This also works for a book or for single-sided
+pages that should become one document.
+
+1. Press **From the flatbed**.
+2. Put the first page on the glass and press **Scan first page** (the gray or
+   color choice of the Scan card applies). The page is held in memory.
+3. Turn the sheet over, or put the next one on the glass, and press **Scan
+   next page**. Repeat for every page; the page shows how many are held.
+4. Press **Save document**. The pages go to `OUTPUT_DIR` as one PDF. A
+   document of a single page is delivered exactly as scanned.
+
+Feeder scans do not take part: paper put into the feeder meanwhile is
+scanned and delivered as usual.
+
+### When something goes wrong
+
+- **A flatbed scan fails**: the pages scanned before stay held; scan the page
+  again.
 - **A pass fails** (jam, aborted job, incomplete PDF, busy scanner): the mode
   stays on and held fronts stay. Clear the feeder, put the stack back and
   the pass is scanned again.
@@ -200,36 +227,41 @@ What happens when something goes wrong:
   valid (it may also be a letter somebody scanned in between), so it is
   delivered as a normal single-sided scan and the page names the file;
   delete it in Paperless if it was meant to be the backs.
-- **Cancel** ends the mode and discards held fronts; the button says so.
-- **Timeout** (`DOUBLE_SIDED_TIMEOUT`, 30 minutes per step) and **shutdown**
-  never discard: held fronts are saved as a normal single-sided scan. You
-  may have walked away believing the document was scanned. The timeout
-  waits for a stack that is already detected in the feeder. If `OUTPUT_DIR`
-  cannot be written when the time is up, the fronts stay held and the time
-  starts again; at shutdown they go to `FAILED_DIR` instead.
+- **Cancel** ends the mode and discards what is held (the fronts, or the
+  flatbed pages so far); the button says so.
+- **Timeout** (`DOUBLE_SIDED_TIMEOUT`, 30 minutes per step or page) and
+  **shutdown** never discard: held fronts are saved as a normal single-sided
+  scan, held flatbed pages as one document. You may have walked away
+  believing the document was scanned. The timeout waits for a stack that is
+  already detected in the feeder. If `OUTPUT_DIR` cannot be written when the
+  time is up, or when you press Save document, everything stays held and
+  the time starts again; at shutdown it goes to `FAILED_DIR` instead.
 - **The PDFs cannot be collated**: pdfcpu reads and rewrites the scanner's
   PDFs. If it cannot read one, the scan is not lost: the fronts are checked
   when they arrive and delivered as a normal scan if they are unreadable,
   and if collating fails later, fronts and backs are delivered unchanged as
-  two files. The page and the log say why.
+  two files. Flatbed pages that cannot be joined are delivered unchanged,
+  one file per scan. The page and the log say why.
 
 The rule behind all of these: a scan that passed validation is never thrown
 away because of double-sided mode. It is held, collated, or delivered as a
-normal scan. Only cancelling discards, and only the held fronts.
+normal scan. Only cancelling discards, and only what is held.
 
 Details:
 
-- The role of a feeder scan is fixed when it starts. Starting or cancelling
-  double-sided mode is refused while a feeder scan runs, and the timeout
-  waits for it.
-- Flatbed scans always go to the normal output and do not change the mode.
+- The role of a scan is fixed when it starts. Starting a run is refused
+  while a scan from its source runs; saving and cancelling are refused, and
+  the timeout waits, while a scan that takes part runs.
+- Scans from the other source never take part: flatbed scans during a
+  feeder run and feeder scans during a flatbed document go to the normal
+  output and do not change the mode.
 - A pass may consist of several documents (some devices return one per
   page); they count as one sequence. The WF-2960 returns one PDF per job.
 - Pages are moved as they are: images are not re-encoded, and their bytes
   are identical to what the scanner sent. The collated file is rewritten by
   pdfcpu (PDF 1.7, classic cross-reference table).
-- The held fronts and the mode live in memory. A crash loses them; a normal
-  shutdown saves the fronts.
+- What is held and the mode live in memory. A crash loses them; a normal
+  shutdown saves what is held.
 - Collating needs, for a moment, about five times the size of the finished
   PDF in memory. A 100-page gray document of 40 MB is no concern; 100 color
   pages of 1.5 MB each need about 750 MB. Size the memory limit for the

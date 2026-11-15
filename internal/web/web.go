@@ -30,7 +30,9 @@ type Scanner interface {
 	Snapshot() autoscan.Snapshot
 	Scan(source escl.InputSource, colorMode string) error
 	SetPaused(paused bool)
-	StartDoubleSided(start bool) error
+	StartDoubleSided(source escl.InputSource) error
+	CancelDoubleSided() error
+	FinishDoubleSided() error
 }
 
 // Config configures the UI.
@@ -180,8 +182,9 @@ type pageData struct {
 	Refresh int // seconds between reloads without JavaScript
 	// Auto: paper put into the feeder is scanned without pressing a button.
 	Auto bool
-	// FeederBusy: a feeder scan runs, so double-sided mode cannot change.
-	FeederBusy bool
+	// PassBusy: a scan that takes part in the double-sided run is running,
+	// so the run cannot be saved or cancelled now.
+	PassBusy bool
 	// DSRemaining is the time left in the current double-sided step.
 	DSRemaining string
 }
@@ -206,7 +209,7 @@ func (s *Server) renderIndex(w http.ResponseWriter, code int, sess *session, raw
 		User: sess.display(), Auth: s.oidc != nil, CSRF: s.csrfToken(raw),
 		Gray: snap.ColorMode != "RGB24", Error: errMsg, Refresh: refresh,
 		Auto:        snap.AutoscanEnabled && !snap.Paused,
-		FeederBusy:  snap.Scanning != nil && snap.Scanning.Source == "feeder",
+		PassBusy:    snap.Scanning != nil && snap.Scanning.Pass != autoscan.DoubleSidedOff,
 		DSRemaining: minutes(snap.DoubleSidedDeadline.Sub(now)),
 	})
 }
@@ -285,16 +288,23 @@ func (s *Server) handleDoubleSided(w http.ResponseWriter, r *http.Request, sess 
 	var err error
 	switch r.PostFormValue("action") {
 	case "start":
-		err = s.scanner.StartDoubleSided(true)
+		err = s.scanner.StartDoubleSided(escl.Feeder)
+	case "flatbed":
+		err = s.scanner.StartDoubleSided(escl.Platen)
+	case "finish":
+		err = s.scanner.FinishDoubleSided()
 	case "cancel":
-		err = s.scanner.StartDoubleSided(false)
+		err = s.scanner.CancelDoubleSided()
 	default:
 		s.renderError(w, http.StatusBadRequest, "Unknown action.")
 		return
 	}
 	switch {
 	case errors.Is(err, autoscan.ErrBusy):
-		s.renderIndex(w, http.StatusConflict, sess, raw, "A feeder scan is running. Wait until it has finished.")
+		s.renderIndex(w, http.StatusConflict, sess, raw, "A scan is running. Wait until it has finished.")
+		return
+	case errors.Is(err, autoscan.ErrDoubleSidedActive):
+		s.renderIndex(w, http.StatusConflict, sess, raw, "Another double-sided document is in progress. Save or cancel it first.")
 		return
 	case err != nil:
 		s.renderIndex(w, http.StatusServiceUnavailable, sess, raw, "Double-sided: "+err.Error()+".")

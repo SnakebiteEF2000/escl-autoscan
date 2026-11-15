@@ -30,7 +30,7 @@
 
 <section class="card">
   <h2>Scan</h2>
-  <form method="post" action="/scan">
+  <form method="post" action="/scan" id="scan">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <div class="segmented" role="radiogroup" aria-label="Color mode">
       <label><input type="radio" name="color" value="gray"{{if .Gray}} checked{{end}}><span>Gray</span></label>
@@ -53,26 +53,39 @@
 <section class="card" data-live="double-sided">
   <h2>Double-sided</h2>
   {{with .Snap.DoubleSidedNote}}{{if .Text}}<p class="note {{.Kind}}">{{.Text}}</p>{{end}}{{end}}
-  {{if eq .Snap.DoubleSided 0}}<p>For a stack printed on both sides: scan the fronts, turn the stack over and scan the backs. The result is one PDF with the pages in order.</p>
+  {{if eq .Snap.DoubleSided 0}}<p>One PDF from several scans, with the pages in order. From the feeder: scan the fronts of a stack, turn it over and scan the backs. From the flatbed: scan page after page.</p>
+  <form method="post" action="/double-sided" class="buttons">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button type="submit" name="action" value="start" class="secondary"{{if .Snap.Scanning}} disabled{{end}}>From the feeder</button>
+    <button type="submit" name="action" value="flatbed" class="secondary"{{if .Snap.Scanning}} disabled{{end}}>From the flatbed</button>
+  </form>
+  {{else if eq .Snap.DoubleSided 3}}<p><strong>Flatbed document, {{if .Snap.DoubleSidedHeld}}{{pageCount .Snap.DoubleSidedHeld}} so far.{{else}}no page yet.{{end}}</strong>
+    {{if .PassBusy}}Scanning now.{{else}}Put the {{if .Snap.DoubleSidedHeld}}next{{else}}first{{end}} page on the glass. For a sheet printed on both sides, scan its front, turn it over and scan its back.{{end}}</p>
+  <p class="muted small">{{.DSRemaining}} left for the next page.{{if .Snap.DoubleSidedHeld}} After that the pages are saved as one document.{{end}}</p>
+  <form method="post" action="/double-sided" class="stack">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button type="submit" form="scan" name="source" value="platen"{{if .Snap.Scanning}} disabled{{end}}>Scan {{if .Snap.DoubleSidedHeld}}next{{else}}first{{end}} page</button>
+    {{if .Snap.DoubleSidedHeld}}<button type="submit" name="action" value="finish" class="secondary"{{if .PassBusy}} disabled{{end}}>Save document, {{pageCount .Snap.DoubleSidedHeld}}</button>{{end}}
+    <button type="submit" name="action" value="cancel" class="secondary"{{if .PassBusy}} disabled{{end}}>{{if .Snap.DoubleSidedHeld}}Cancel and discard {{pageCount .Snap.DoubleSidedHeld}}{{else}}Cancel{{end}}</button>
+  </form>
   {{else}}<ol class="steps">
     <li class="{{if eq .Snap.DoubleSided 1}}current{{else}}done{{end}}">
       <strong>Scan the fronts</strong>
-      {{if and .FeederBusy (eq .Snap.DoubleSided 1)}}<p>Scanning now.</p>
+      {{if and .PassBusy (eq .Snap.DoubleSided 1)}}<p>Scanning now.</p>
       {{else if eq .Snap.DoubleSided 1}}<p>Put the stack into the feeder{{if not .Auto}} and press Scan feeder{{end}}.</p>
-      {{else}}<p>Done, {{pageCount .Snap.DoubleSidedFronts}} held.</p>{{end}}
+      {{else}}<p>Done, {{pageCount .Snap.DoubleSidedHeld}} held.</p>{{end}}
     </li>
     <li{{if eq .Snap.DoubleSided 2}} class="current"{{end}}>
       <strong>Turn the stack over and scan the backs</strong>
-      {{if and .FeederBusy (eq .Snap.DoubleSided 2)}}<p>Scanning now.</p>
+      {{if and .PassBusy (eq .Snap.DoubleSided 2)}}<p>Scanning now.</p>
       {{else if eq .Snap.DoubleSided 2}}<p>Take the stack out of the output tray as it is. Turn it over without re-sorting it and put it back into the feeder{{if not .Auto}}, then press Scan feeder{{end}}.</p>{{end}}
     </li>
   </ol>
-  <p class="muted small">{{.DSRemaining}} left for this step.{{if eq .Snap.DoubleSided 2}} After that the fronts are saved as a single-sided scan.{{end}}</p>{{end}}
+  <p class="muted small">{{.DSRemaining}} left for this step.{{if eq .Snap.DoubleSided 2}} After that the fronts are saved as a single-sided scan.{{end}}</p>
   <form method="post" action="/double-sided">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
-    {{if eq .Snap.DoubleSided 0}}<button type="submit" name="action" value="start" class="secondary"{{if .FeederBusy}} disabled{{end}}>Start double-sided</button>
-    {{else}}<button type="submit" name="action" value="cancel" class="secondary"{{if .FeederBusy}} disabled{{end}}>{{if eq .Snap.DoubleSided 2}}Cancel and discard the fronts{{else}}Cancel double-sided{{end}}</button>{{end}}
-  </form>
+    <button type="submit" name="action" value="cancel" class="secondary"{{if .PassBusy}} disabled{{end}}>{{if eq .Snap.DoubleSided 2}}Cancel and discard the fronts{{else}}Cancel double-sided{{end}}</button>
+  </form>{{end}}
 </section>
 
 <section class="card">

@@ -51,6 +51,12 @@ func newHero(s autoscan.Snapshot, now time.Time) hero {
 		return hero{"bad", "Scanner stopped", "It reports “" + s.State + "”. Check the display of the scanner."}
 	case s.State != escl.StateIdle:
 		return hero{"warn", "Scanner is busy", "It reports “" + s.State + "”: someone is copying, or using its panel."}
+	case s.DoubleSided == autoscan.DoubleSidedFlatbed:
+		if s.DoubleSidedHeld == 0 {
+			return hero{"ok", "Ready for the first page", "Put it on the glass and press Scan first page."}
+		}
+		return hero{"ok", "Ready for the next page", "Put it on the glass and press Scan next page, or save the document: " +
+			pageCount(s.DoubleSidedHeld) + " so far."}
 	case !s.AutoscanEnabled:
 		return hero{"idle", "Ready", "Autoscan is switched off. Use the buttons below to scan."}
 	case s.Paused:

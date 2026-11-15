@@ -36,16 +36,28 @@ type fakeScanner struct {
 	snap   func(*autoscan.Snapshot) // adjusts the snapshot
 }
 
-func (f *fakeScanner) StartDoubleSided(start bool) error {
+func (f *fakeScanner) StartDoubleSided(source escl.InputSource) error {
+	state := autoscan.DoubleSidedFronts
+	if source == escl.Platen {
+		state = autoscan.DoubleSidedFlatbed
+	}
+	return f.doubleSided("start "+string(source), state)
+}
+
+func (f *fakeScanner) CancelDoubleSided() error {
+	return f.doubleSided("cancel", autoscan.DoubleSidedOff)
+}
+func (f *fakeScanner) FinishDoubleSided() error {
+	return f.doubleSided("finish", autoscan.DoubleSidedOff)
+}
+
+func (f *fakeScanner) doubleSided(call string, state int) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.busy {
 		return autoscan.ErrBusy
 	}
-	state := autoscan.DoubleSidedOff
-	if start {
-		state = autoscan.DoubleSidedFronts
-	}
+	f.scans = append(f.scans, call)
 	f.snap = func(s *autoscan.Snapshot) { s.DoubleSided = state }
 	return nil
 }
@@ -659,8 +671,10 @@ func TestStringListClaim(t *testing.T) {
 func TestDoubleSided(t *testing.T) {
 	u := newUI(t, func(c *Config, _ string) { c.NoAuth = true })
 	_, body := u.page()
-	if !strings.Contains(body, `action="/double-sided"`) || !strings.Contains(body, "Start double-sided") {
-		t.Fatal("double-sided controls missing")
+	for _, want := range []string{`action="/double-sided"`, `value="start" class="secondary">From the feeder`, `value="flatbed" class="secondary">From the flatbed`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("double-sided controls: %q missing", want)
+		}
 	}
 	csrf := u.csrf()
 	if code := u.post("/double-sided", url.Values{"action": {"start"}}, u.URL).StatusCode; code != http.StatusForbidden {
@@ -684,7 +698,7 @@ func TestDoubleSided(t *testing.T) {
 
 	// Fronts held: the second step is the current one, and cancelling says what it costs.
 	u.scanner.set(func(s *autoscan.Snapshot) {
-		s.DoubleSided, s.DoubleSidedFronts = autoscan.DoubleSidedBacks, 3
+		s.DoubleSided, s.DoubleSidedHeld = autoscan.DoubleSidedBacks, 3
 		s.DoubleSidedNote = autoscan.Note{Kind: autoscan.NoteWarn, Text: "The scan of the backs failed (aborted)."}
 	})
 	_, body = u.page()
@@ -698,10 +712,62 @@ func TestDoubleSided(t *testing.T) {
 		t.Errorf("cancel: %d", code)
 	}
 
-	// While a feeder scan runs the mode cannot change.
+	// While a scan that takes part runs, the run cannot change.
 	u.scanner.setBusy(true)
 	if code := u.post("/double-sided", url.Values{"csrf": {csrf}, "action": {"start"}}, u.URL).StatusCode; code != http.StatusConflict {
 		t.Errorf("start during a feeder scan: %d, want 409", code)
+	}
+	if got := strings.Join(u.scanner.calls(), ","); got != "start Feeder,cancel" {
+		t.Errorf("calls = %s", got)
+	}
+}
+
+// A flatbed document: pages scanned one by one, saved as one PDF.
+func TestFlatbedDocument(t *testing.T) {
+	u := newUI(t, func(c *Config, _ string) { c.NoAuth = true })
+	csrf := u.csrf()
+	if code := u.post("/double-sided", url.Values{"csrf": {csrf}, "action": {"flatbed"}}, u.URL).StatusCode; code != http.StatusSeeOther {
+		t.Fatalf("start: %d", code)
+	}
+	_, body := u.page()
+	for _, want := range []string{"Ready for the first page", "Flatbed document, no page yet.", "Put the first page on the glass",
+		// The button belongs to the scan form, so it sends the colour choice.
+		`<form method="post" action="/scan" id="scan">`, `<button type="submit" form="scan" name="source" value="platen">Scan first page</button>`,
+		`value="cancel" class="secondary">Cancel</button>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("no page yet: %q missing", want)
+		}
+	}
+	if strings.Contains(body, `value="finish"`) {
+		t.Error("nothing to save yet, but there is a save button")
+	}
+
+	u.scanner.set(func(s *autoscan.Snapshot) { s.DoubleSided, s.DoubleSidedHeld = autoscan.DoubleSidedFlatbed, 3 })
+	_, body = u.page()
+	for _, want := range []string{"Ready for the next page", "Flatbed document, 3 pages so far.", "Scan next page</button>",
+		`value="finish" class="secondary">Save document, 3 pages</button>`, "Cancel and discard 3 pages", "the pages are saved as one document"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("three pages: %q missing", want)
+		}
+	}
+
+	// While a page is scanned, the document can neither be saved nor cancelled.
+	u.scanner.set(func(s *autoscan.Snapshot) {
+		s.DoubleSided, s.DoubleSidedHeld = autoscan.DoubleSidedFlatbed, 3
+		s.Scanning = &autoscan.Current{Source: "platen", Pass: autoscan.DoubleSidedFlatbed, Started: time.Now()}
+	})
+	_, body = u.page()
+	for _, want := range []string{"Scanning the flatbed", "Scanning now.", `value="platen" disabled>Scan next page`, `value="finish" class="secondary" disabled>`, `value="cancel" class="secondary" disabled>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("while scanning: %q missing", want)
+		}
+	}
+
+	if code := u.post("/double-sided", url.Values{"csrf": {csrf}, "action": {"finish"}}, u.URL).StatusCode; code != http.StatusSeeOther {
+		t.Errorf("save: %d", code)
+	}
+	if got := strings.Join(u.scanner.calls(), ","); got != "start Platen,finish" {
+		t.Errorf("calls = %s", got)
 	}
 }
 

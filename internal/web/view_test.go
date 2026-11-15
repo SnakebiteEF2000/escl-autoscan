@@ -43,6 +43,17 @@ func TestHero(t *testing.T) {
 		{"between sheets", ready(func(s *autoscan.Snapshot) { s.AdfState, s.Armed = "ScannerAdfProcessing", false }), "idle", "Waiting for an empty feeder", ""},
 		{"fronts", ready(func(s *autoscan.Snapshot) { s.DoubleSided = autoscan.DoubleSidedFronts }), "ok", "Ready for the fronts", "Put the stack"},
 		{"backs", ready(func(s *autoscan.Snapshot) { s.DoubleSided = autoscan.DoubleSidedBacks }), "ok", "Ready for the backs", "Turn the stack over"},
+		{"flatbed, first page", ready(func(s *autoscan.Snapshot) { s.DoubleSided = autoscan.DoubleSidedFlatbed }), "ok", "Ready for the first page", "Scan first page"},
+		{"flatbed, next page", ready(func(s *autoscan.Snapshot) {
+			s.DoubleSided, s.DoubleSidedHeld = autoscan.DoubleSidedFlatbed, 2
+		}), "ok", "Ready for the next page", "2 pages so far"},
+		// A flatbed document does not need autoscan, but paper in the feeder still comes first.
+		{"flatbed, autoscan paused", ready(func(s *autoscan.Snapshot) {
+			s.DoubleSided, s.DoubleSidedHeld, s.Paused = autoscan.DoubleSidedFlatbed, 1, true
+		}), "ok", "Ready for the next page", "1 page so far"},
+		{"flatbed, paper detected", ready(func(s *autoscan.Snapshot) {
+			s.DoubleSided, s.AdfState, s.Settling = autoscan.DoubleSidedFlatbed, "ScannerAdfLoaded", true
+		}), "busy", "Paper detected", "Scanning starts within 10 s"},
 		// A running scan comes first, whatever the scanner reports meanwhile.
 		{"scanning", ready(func(s *autoscan.Snapshot) {
 			s.State, s.AdfState, s.Armed = "Processing", "ScannerAdfProcessing", false

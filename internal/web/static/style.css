@@ -56,6 +56,7 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 button.secondary { background: transparent; color: var(--fg); border-color: var(--edge); }
 button.link { background: none; color: var(--link); font-weight: 400; min-height: 0; padding: 0; }
 .buttons { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+.stack { display: grid; gap: .5rem; }
 .row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem;
   margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--line); }
 .row p { margin: 0; flex: 1 1 14rem; }
@@ -104,6 +105,7 @@ main > .note { margin: 0; }
 
 @media (min-width: 34rem) {
   .buttons { grid-template-columns: repeat(2, max-content); }
+  .stack { display: flex; flex-wrap: wrap; }
   .segmented { display: inline-grid; }
   .segmented span { min-width: 7rem; }
 }
