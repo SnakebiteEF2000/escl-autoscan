@@ -82,7 +82,7 @@ func New(reg prometheus.Registerer, knownAdfStates []string) *Metrics {
 		}),
 		lastSuccess: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: namespace, Name: "last_success_timestamp_seconds",
-			Help: "Unix time of the last delivered scan.",
+			Help: "Unix time of the last successful scan.",
 		}),
 		duration: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Namespace: namespace, Name: "scan_duration_seconds",

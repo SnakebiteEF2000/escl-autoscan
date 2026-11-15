@@ -514,6 +514,24 @@ func TestLoadedAtStartupIsNotScanned(t *testing.T) {
 	}
 }
 
+// The status is read again right after a scan, not a poll interval later:
+// the last poll is from before or during the scan.
+func TestStatusIsPolledRightAfterAScan(t *testing.T) {
+	h := newHarness(t, func(c *Config) {
+		c.Enabled = false
+		c.PollInterval, c.MaxBackoff = time.Minute, time.Minute
+	}, nil)
+	h.eventually("first poll", func() bool { return h.svc.Snapshot().Reachable })
+	h.fake.QueueJob(escltest.Step{Body: pdftest.New(pdftest.Options{Pages: 1}), Before: func(s *escltest.Server) {
+		s.SetStatus("Idle", "ScannerAdfLoaded") // somebody puts paper in during the scan
+	}})
+	if err := h.svc.Scan(escl.Platen, ""); err != nil {
+		t.Fatal(err)
+	}
+	h.waitRecords(1)
+	h.eventually("status from after the scan", func() bool { return h.svc.Snapshot().AdfState == escl.AdfLoaded })
+}
+
 func TestShutdownCancelsAndDeletesRunningJob(t *testing.T) {
 	h := newHarness(t, func(c *Config) { c.Enabled = false }, nil)
 	h.eventually("reachable", func() bool { return h.svc.Snapshot().Reachable })

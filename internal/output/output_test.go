@@ -3,10 +3,12 @@ package output
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -160,5 +162,39 @@ func TestCheckDirs(t *testing.T) {
 	// A sibling whose name starts with ".." of the consume dir is not inside it.
 	if within(filepath.Join(root, "consume..x"), consume) {
 		t.Error("within: sibling treated as inside")
+	}
+}
+
+// Writes may come from two goroutines (a scan, and fronts saved after a
+// double-sided timeout), even with the same time stamp. No file may replace
+// another.
+func TestWriteConcurrently(t *testing.T) {
+	dir := t.TempDir()
+	w := &Writer{Dir: dir}
+	at := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	const n = 40
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			if _, err := w.Write(fmt.Appendf(nil, "document %d", i), at, ""); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, e := range entries {
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen[string(data)] = true
+	}
+	if len(entries) != n || len(seen) != n {
+		t.Fatalf("%d files with %d different contents, want %d of each", len(entries), len(seen), n)
 	}
 }

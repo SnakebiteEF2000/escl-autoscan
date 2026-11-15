@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -160,13 +161,34 @@ func drawnImages(t *testing.T, pdf []byte) []string {
 	return out
 }
 
-func TestPanicBecomesAnError(t *testing.T) {
-	f := func() (err error) {
-		defer recovered(&err)
-		panic("boom")
+// testdata/pdfcpu-panic.pdf was found by fuzzing: it passes ValidatePDF and
+// Pages, and then pdfcpu v0.16.4 fails while its pages are put into a new
+// page tree, in about five of six runs by dereferencing nil. A panic must
+// come back as an error; in the scan goroutine it would end the process.
+// Without the recover in Interleave this test crashes.
+func TestInterleaveSurvivesAPdfcpuPanic(t *testing.T) {
+	bad, err := os.ReadFile("testdata/pdfcpu-panic.pdf")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := f(); err == nil || !strings.Contains(err.Error(), "boom") {
-		t.Fatalf("err = %v", err)
+	if _, err := output.ValidatePDF(bad); err != nil {
+		t.Fatalf("the fixture no longer passes ValidatePDF: %v", err)
+	}
+	n, err := Pages([][]byte{bad})
+	if err != nil {
+		t.Skipf("pdfcpu now refuses the fixture when counting pages: %v", err)
+	}
+	good := pdftest.New(pdftest.Options{Pages: n})
+	panics := 0
+	for range 20 {
+		for _, pass := range [][2][]byte{{bad, good}, {good, bad}} {
+			if _, _, err := Interleave([][]byte{pass[0]}, [][]byte{pass[1]}); err != nil && strings.Contains(err.Error(), "panicked") {
+				panics++
+			}
+		}
+	}
+	if panics == 0 {
+		t.Log("pdfcpu no longer panics on the fixture; the recover is not exercised by this test any more")
 	}
 }
 
