@@ -8,3 +8,6 @@
 .idea/
 .vscode/
 .DS_Store
+
+# Scans written by the local test setup (compose.yaml)
+/local/

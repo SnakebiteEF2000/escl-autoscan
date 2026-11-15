@@ -1,0 +1,52 @@
+# Local test setup: escl-autoscan with a simulated scanner, no login.
+#
+#   docker compose up --build -d
+#
+#   http://localhost:8080   the UI
+#   http://localhost:8081   the simulator: put paper into the feeder, turn the
+#                           stack over, cause a jam
+#   ./local/output          the PDFs (every page says what it is, e.g. "A2 back")
+#   ./local/failed          rejected scans
+#
+# To use a real scanner instead of the simulator:
+#
+#   ESCL_URL=https://192.0.2.10 docker compose up --build -d escl-autoscan
+#
+# Only one escl-autoscan should watch a scanner. If another instance is
+# running, add AUTOSCAN_PAUSED=true here or pause that one.
+services:
+  escl-autoscan:
+    build: .
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      ESCL_URL: ${ESCL_URL:-https://simulator:8443}
+      ESCL_TLS_INSECURE: ${ESCL_TLS_INSECURE:-true}
+      ESCL_TLS_FINGERPRINT: ${ESCL_TLS_FINGERPRINT:-}
+      AUTOSCAN_PAUSED: ${AUTOSCAN_PAUSED:-false}
+      AUTOSCAN_SETTLE: 5s
+      OUTPUT_DIR: /output
+      FAILED_DIR: /failed
+      TZ: ${TZ:-Europe/Berlin}
+      UI_NO_AUTH: "true"
+      COOKIE_INSECURE: "true"
+      LOG_FORMAT: text
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:9091:9090"
+    volumes:
+      - ./local/output:/output
+      - ./local/failed:/failed
+    depends_on: [simulator]
+    restart: unless-stopped
+
+  simulator:
+    build:
+      context: .
+      target: simulator
+    read_only: true
+    cap_drop: [ALL]
+    ports:
+      - "127.0.0.1:8081:8081"
+    restart: unless-stopped
