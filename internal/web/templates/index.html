@@ -1,0 +1,66 @@
+{{template "head" "Scanner"}}<meta http-equiv="refresh" content="{{.Refresh}}">
+</head>
+<body>
+<header>
+  <h1>Scanner</h1>
+  {{if .Auth}}<form method="post" action="/auth/logout" class="user">
+    <span>{{.User}}</span>
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button type="submit" class="link">Log out</button>
+  </form>{{end}}
+</header>
+<main>
+{{if .Error}}<p class="banner error" role="alert">{{.Error}}</p>{{end}}
+{{with .Snap}}
+<section class="card">
+  <h2>Status</h2>
+  <dl>
+    <dt>Scanner</dt>
+    <dd>{{if .Reachable}}<span class="dot ok"></span>reachable{{else}}<span class="dot bad"></span>unreachable{{end}}{{if .Model}} · {{.Model}}{{end}}</dd>
+    <dt>State</dt><dd>{{if .State}}{{.State}}{{else}}–{{end}}</dd>
+    <dt>Feeder</dt><dd>{{if .AdfState}}{{.AdfState}}{{else}}–{{end}}</dd>
+    <dt>Autoscan</dt>
+    <dd>{{if not .AutoscanEnabled}}disabled{{else if .Paused}}<span class="dot warn"></span>paused{{else if .Armed}}<span class="dot ok"></span>armed, waiting for paper{{else}}<span class="dot warn"></span>waiting for an empty feeder{{end}}{{if .Settling}} · paper detected, scanning shortly{{end}}</dd>
+    <dt>Now</dt><dd>{{with .Scanning}}scanning {{.Source}} ({{.Trigger}}) since {{fmtTime .Started}}{{else}}idle{{end}}</dd>
+    {{if .LastError}}<dt>Last error</dt><dd class="muted">{{.LastError}}</dd>{{end}}
+  </dl>
+</section>
+{{end}}
+<section class="card">
+  <h2>Scan</h2>
+  <form method="post" action="/scan" class="controls">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <fieldset>
+      <legend>Mode</legend>
+      <label><input type="radio" name="color" value="gray"{{if .Gray}} checked{{end}}> Gray</label>
+      <label><input type="radio" name="color" value="color"{{if not .Gray}} checked{{end}}> Color</label>
+    </fieldset>
+    <div class="buttons">
+      <button type="submit" name="source" value="feeder"{{if .Snap.Scanning}} disabled{{end}}>Scan feeder</button>
+      <button type="submit" name="source" value="platen"{{if .Snap.Scanning}} disabled{{end}}>Scan flatbed</button>
+    </div>
+  </form>
+  {{if .Snap.AutoscanEnabled}}<form method="post" action="/pause" class="pause">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    {{if .Snap.Paused}}<button type="submit" name="action" value="resume" class="secondary">Resume autoscan</button>
+    {{else}}<button type="submit" name="action" value="pause" class="secondary">Pause autoscan</button>{{end}}
+  </form>{{end}}
+</section>
+<section class="card">
+  <h2>Recent scans</h2>
+  {{if .Snap.History}}<div class="table"><table>
+    <thead><tr><th>Time</th><th>Source</th><th>Pages</th><th>Result</th><th>File</th></tr></thead>
+    <tbody>
+    {{range .Snap.History}}<tr>
+      <td>{{fmtTime .Time}}</td>
+      <td>{{.Source}} <span class="muted">{{.Trigger}}</span></td>
+      <td>{{if .Pages}}{{.Pages}}{{else}}–{{end}}</td>
+      <td><span class="result {{.Result}}">{{.Result}}</span>{{if .Message}}<div class="muted small">{{.Message}}</div>{{end}}</td>
+      <td class="file">{{range .Files}}<div>{{.}}</div>{{else}}–{{end}}</td>
+    </tr>{{end}}
+    </tbody>
+  </table></div>{{else}}<p class="muted">No scans yet.</p>{{end}}
+</section>
+</main>
+</body>
+</html>

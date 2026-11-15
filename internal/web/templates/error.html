@@ -1,0 +1,11 @@
+{{template "head" "Error"}}</head>
+<body>
+<main class="narrow">
+<section class="card">
+  <h2>{{.Code}}</h2>
+  <p>{{.Message}}</p>
+  <p><a href="/">Back to the scanner</a>{{if .Auth}} · <a href="/auth/login">Log in</a>{{end}}</p>
+</section>
+</main>
+</body>
+</html>
