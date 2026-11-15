@@ -221,6 +221,11 @@ func (s *Service) Snapshot() Snapshot {
 		snap.DoubleSidedHeld = s.dsHeld.pages
 		snap.ColorMode = s.dsHeld.color
 	}
+	if s.scanning != nil && s.scanning.Pass != DoubleSidedOff {
+		// The page is loaded again right after a scan was started, while
+		// it runs: preselect what was just chosen.
+		snap.ColorMode = s.scanning.Color
+	}
 	if s.scanning != nil {
 		cur := *s.scanning
 		snap.Scanning = &cur

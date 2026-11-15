@@ -290,6 +290,18 @@ func TestDoubleSidedRunKeepsTheColorMode(t *testing.T) {
 	t.Run("flatbed", func(t *testing.T) {
 		h, _ := dsHarness(t)
 		h.startFlatbed()
+		// The page is loaded again while the first scan still runs.
+		slow := stack(1, 50)
+		slow.Delay = 100 * time.Millisecond
+		h.fake.QueueJob(slow)
+		if err := h.svc.Scan(escl.Platen, "RGB24"); err != nil {
+			t.Fatal(err)
+		}
+		if s := h.svc.Snapshot(); s.Scanning == nil || s.ColorMode != "RGB24" {
+			t.Errorf("while the first page is scanned: preselected mode = %s, want RGB24", s.ColorMode)
+		}
+		h.waitRecords(1)
+		h.eventually("idle", func() bool { return h.svc.Snapshot().Scanning == nil })
 		scan(h, escl.Platen, "RGB24", stack(1, 100))
 		if got := h.svc.Snapshot().ColorMode; got != "RGB24" {
 			t.Errorf("preselected mode = %s, want RGB24", got)
