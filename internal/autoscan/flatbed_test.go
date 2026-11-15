@@ -268,3 +268,55 @@ func TestFlatbedDocumentTimeoutAndShutdown(t *testing.T) {
 		}
 	})
 }
+
+// One document, one look: within a run the next scan uses the color mode of
+// the scans before, unless another one is chosen. The UI preselects it.
+func TestDoubleSidedRunKeepsTheColorMode(t *testing.T) {
+	lastJob := func(h *harness) string {
+		jobs := h.fake.Jobs()
+		return jobs[len(jobs)-1].Settings
+	}
+	scan := func(h *harness, source escl.InputSource, color string, step escltest.Step) {
+		t.Helper()
+		n := len(h.history())
+		h.fake.QueueJob(step)
+		if err := h.svc.Scan(source, color); err != nil {
+			t.Fatal(err)
+		}
+		h.waitRecords(n + 1)
+		h.eventually("idle", func() bool { return h.svc.Snapshot().Scanning == nil })
+	}
+
+	t.Run("flatbed", func(t *testing.T) {
+		h, _ := dsHarness(t)
+		h.startFlatbed()
+		scan(h, escl.Platen, "RGB24", stack(1, 100))
+		if got := h.svc.Snapshot().ColorMode; got != "RGB24" {
+			t.Errorf("preselected mode = %s, want RGB24", got)
+		}
+		scan(h, escl.Platen, "", stack(1, 200))
+		if !strings.Contains(lastJob(h), "<scan:ColorMode>RGB24<") {
+			t.Errorf("second page: %s", lastJob(h))
+		}
+		// A feeder scan in between is not part of the document.
+		scan(h, escl.Feeder, "", stack(1, 300))
+		if !strings.Contains(lastJob(h), "<scan:ColorMode>Grayscale8<") {
+			t.Errorf("feeder scan: %s", lastJob(h))
+		}
+		if err := h.svc.FinishDoubleSided(); err != nil {
+			t.Fatal(err)
+		}
+		if got := h.svc.Snapshot().ColorMode; got != "Grayscale8" {
+			t.Errorf("preselected mode after the document = %s, want the default", got)
+		}
+	})
+	t.Run("feeder", func(t *testing.T) {
+		h, _ := dsHarness(t)
+		h.start()
+		scan(h, escl.Feeder, "RGB24", stack(2, 100))
+		scan(h, escl.Feeder, "", stack(2, 200)) // as autoscan starts it
+		if !strings.Contains(lastJob(h), "<scan:ColorMode>RGB24<") || h.dsTotal(metrics.DoubleSidedDelivered) != 1 {
+			t.Errorf("backs: %s", lastJob(h))
+		}
+	})
+}

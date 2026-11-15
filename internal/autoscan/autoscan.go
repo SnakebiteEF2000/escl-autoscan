@@ -180,7 +180,7 @@ type Snapshot struct {
 	Settling        bool
 	Settle          time.Duration // delay between detecting paper and scanning
 	Scanning        *Current
-	ColorMode       string
+	ColorMode       string   // preselected: SCAN_COLOR_MODE, or the mode of the scans held for a double-sided document
 	History         []Record // newest first
 
 	DoubleSided         int       // DoubleSidedOff, ...Fronts, ...Backs, ...Flatbed
@@ -219,6 +219,7 @@ func (s *Service) Snapshot() Snapshot {
 	}
 	if s.dsHeld != nil {
 		snap.DoubleSidedHeld = s.dsHeld.pages
+		snap.ColorMode = s.dsHeld.color
 	}
 	if s.scanning != nil {
 		cur := *s.scanning
@@ -399,7 +400,7 @@ func (s *Service) settled(ctx context.Context) {
 		reason = "scanner " + st.State
 	}
 	if reason == "" {
-		err = s.start(escl.Feeder, s.cfg.ColorMode, "auto")
+		err = s.start(escl.Feeder, "", "auto")
 		if err == nil {
 			return
 		}
@@ -417,11 +418,8 @@ func (s *Service) settled(ctx context.Context) {
 }
 
 // Scan starts a manual scan in the background. It returns ErrBusy while
-// another scan runs.
+// another scan runs. An empty colorMode means the default.
 func (s *Service) Scan(source escl.InputSource, colorMode string) error {
-	if colorMode == "" {
-		colorMode = s.cfg.ColorMode
-	}
 	return s.start(source, colorMode, "manual")
 }
 
@@ -434,7 +432,7 @@ func (s *Service) start(source escl.InputSource, colorMode, trigger string) erro
 	if s.scanning != nil {
 		return ErrBusy
 	}
-	cur := &Current{Source: sourceLabel(source), Trigger: trigger, Color: colorMode, Started: s.now()}
+	cur := &Current{Source: sourceLabel(source), Trigger: trigger, Started: s.now()}
 	if source == escl.Feeder {
 		// Whatever happens, this stack is done; wait for an empty feeder.
 		s.setArmed(false, "scan started")
@@ -442,6 +440,16 @@ func (s *Service) start(source escl.InputSource, colorMode, trigger string) erro
 	if (source == escl.Platen) == (s.ds == DoubleSidedFlatbed) {
 		cur.Pass = s.ds // the scan takes part in the run from its source
 	}
+	// The default color mode is SCAN_COLOR_MODE; within a double-sided run
+	// it is the mode of the scans before, so that the backs match the fronts.
+	switch {
+	case colorMode != "":
+	case cur.Pass != DoubleSidedOff && s.dsHeld != nil:
+		colorMode = s.dsHeld.color
+	default:
+		colorMode = s.cfg.ColorMode
+	}
+	cur.Color = colorMode
 	if cur.Pass != DoubleSidedOff || s.ds == DoubleSidedOff {
 		s.dsNote = Note{} // it was about an earlier scan
 	}

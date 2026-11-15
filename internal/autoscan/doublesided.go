@@ -70,6 +70,9 @@ type heldPages struct {
 	docs  [][]byte
 	pages int
 	at    time.Time // time of the last scan; names the file
+	// color is the color mode of the last scan. The next scan of the run
+	// uses it unless the user chooses another: one document, one look.
+	color string
 }
 
 // StartDoubleSided starts a run from the feeder (fronts, then backs) or from
@@ -386,7 +389,7 @@ func (s *Service) holdPage(rec *Record, docs [][]byte) {
 	}
 	s.dsHeld.docs = append(s.dsHeld.docs, docs...)
 	s.dsHeld.pages += rec.Pages
-	s.dsHeld.at = rec.Time
+	s.dsHeld.at, s.dsHeld.color = rec.Time, rec.Color
 	pages := s.dsHeld.pages
 	s.setDoubleSided(DoubleSidedFlatbed, Note{})
 	s.mu.Unlock()
@@ -414,7 +417,7 @@ func (s *Service) holdFronts(rec *Record, docs [][]byte) {
 	rec.Message = joinMsg(rec.Message, "fronts held, waiting for the backs")
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.dsHeld = &heldPages{docs: docs, pages: pages, at: rec.Time}
+	s.dsHeld = &heldPages{docs: docs, pages: pages, at: rec.Time, color: rec.Color}
 	s.setDoubleSided(DoubleSidedBacks, Note{})
 	s.log.Info("double-sided fronts held, waiting for the backs", "pages", pages, "timeout", s.cfg.DoubleSidedTimeout)
 }

@@ -204,7 +204,8 @@ pages that should become one document.
 
 1. Press **From the flatbed**.
 2. Put the first page on the glass and press **Scan first page** (the gray or
-   color choice of the Scan card applies). The page is held in memory.
+   color choice of the Scan card applies, and stays selected for the
+   following pages). The page is held in memory.
 3. Turn the sheet over, or put the next one on the glass, and press **Scan
    next page**. Repeat for every page; the page shows how many are held.
 4. Press **Save document**. The pages go to `OUTPUT_DIR` as one PDF. A
@@ -249,6 +250,9 @@ normal scan. Only cancelling discards, and only what is held.
 
 Details:
 
+- One document, one look: the backs are scanned in the color mode of the
+  fronts, also when autoscan starts them, and the page preselects the mode
+  of the scans held so far. Choosing another mode for a scan still works.
 - The role of a scan is fixed when it starts. Starting a run is refused
   while a scan from its source runs; saving and cancelling are refused, and
   the timeout waits, while a scan that takes part runs.
