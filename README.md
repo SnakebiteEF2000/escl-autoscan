@@ -102,7 +102,8 @@ them all.
 | `ESCL_TLS_INSECURE` | `false` | Skip certificate verification entirely. Use the fingerprint instead if you can. |
 | `ESCL_TIMEOUT` | `10s` | Timeout for status, capabilities, job creation and deletion. |
 | `ESCL_DOCUMENT_TIMEOUT` | `5m` | Timeout for one NextDocument request. The WF-2960 holds it open while the whole stack is scanned. |
-| `POLL_INTERVAL` | `3s` | Status poll interval. Backs off up to 30s while the scanner is unreachable. |
+| `POLL_INTERVAL` | `3s` | Status poll interval. Backs off up to `POLL_MAX_BACKOFF` while the scanner is unreachable. |
+| `POLL_MAX_BACKOFF` | `30s` | Longest poll interval while the scanner is unreachable (switched off or asleep). Lower it if the scanner is usually off and should be noticed sooner after power-on. |
 | `AUTOSCAN_ENABLED` | `true` | Scan automatically. With `false`, only the UI buttons scan. |
 | `AUTOSCAN_SETTLE` | `10s` | Delay between detecting paper and scanning. |
 | `AUTOSCAN_PAUSED` | `false` | Start paused. |

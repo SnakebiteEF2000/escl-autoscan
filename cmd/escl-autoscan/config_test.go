@@ -52,6 +52,7 @@ func TestDefaults(t *testing.T) {
 func TestEnvAndFlags(t *testing.T) {
 	c, err := parseConfig([]string{"-poll-interval=1s", "-scan-color-mode", "RGB24"}, env(with(map[string]string{
 		"POLL_INTERVAL":        "7s", // the flag wins
+		"POLL_MAX_BACKOFF":     "10s",
 		"AUTOSCAN_ENABLED":     "false",
 		"SCAN_X_OFFSET":        "70",
 		"TZ":                   "Europe/Berlin",
@@ -61,6 +62,9 @@ func TestEnvAndFlags(t *testing.T) {
 	})), io.Discard)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if c.PollMaxBackoff != 10*time.Second {
+		t.Errorf("PollMaxBackoff = %v, want 10s", c.PollMaxBackoff)
 	}
 	if c.PollInterval != time.Second || c.ScanColorMode != "RGB24" || c.AutoscanEnabled || c.ScanXOffset != 70 ||
 		c.location.String() != "Europe/Berlin" || c.TLSFingerprint != "AA:BB" {
@@ -91,6 +95,7 @@ func TestValidation(t *testing.T) {
 		{"secret twice", with(map[string]string{"OIDC_CLIENT_SECRET": "x", "OIDC_CLIENT_SECRET_FILE": "/x"}), "not both"},
 		{"log format", with(map[string]string{"LOG_FORMAT": "xml"}), "LOG_FORMAT"},
 		{"region", with(map[string]string{"SCAN_WIDTH": "0"}), "SCAN_WIDTH"},
+		{"backoff below poll", with(map[string]string{"POLL_INTERVAL": "5s", "POLL_MAX_BACKOFF": "2s"}), "POLL_MAX_BACKOFF"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

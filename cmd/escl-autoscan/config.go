@@ -22,6 +22,7 @@ type config struct {
 	ESCLTimeout         time.Duration
 	ESCLDocumentTimeout time.Duration
 	PollInterval        time.Duration
+	PollMaxBackoff      time.Duration
 
 	AutoscanEnabled bool
 	AutoscanSettle  time.Duration
@@ -85,7 +86,8 @@ func parseConfig(args []string, getenv func(string) (string, bool), out io.Write
 	fs.BoolVar(&c.TLSInsecure, "escl-tls-insecure", false, "do not verify the scanner's TLS certificate at all")
 	fs.DurationVar(&c.ESCLTimeout, "escl-timeout", 10*time.Second, "timeout for status, capabilities, job creation and deletion")
 	fs.DurationVar(&c.ESCLDocumentTimeout, "escl-document-timeout", 5*time.Minute, "timeout for one NextDocument request (blocks while the feeder scans)")
-	fs.DurationVar(&c.PollInterval, "poll-interval", 3*time.Second, "scanner status poll interval (backs off up to 30s while unreachable)")
+	fs.DurationVar(&c.PollInterval, "poll-interval", 3*time.Second, "scanner status poll interval (backs off up to -poll-max-backoff while unreachable)")
+	fs.DurationVar(&c.PollMaxBackoff, "poll-max-backoff", 30*time.Second, "longest poll interval while the scanner is unreachable (switched off, asleep); also bounds how long a switched-on scanner goes unnoticed")
 
 	fs.BoolVar(&c.AutoscanEnabled, "autoscan-enabled", true, "scan automatically when paper is put into the feeder")
 	fs.DurationVar(&c.AutoscanSettle, "autoscan-settle", 10*time.Second, "wait this long after paper is detected before scanning")
@@ -181,6 +183,7 @@ func (c *config) validate() error {
 	check(!(c.TLSFingerprint != "" && c.TLSInsecure), "set ESCL_TLS_FINGERPRINT or ESCL_TLS_INSECURE, not both")
 	check(c.ESCLTimeout > 0 && c.ESCLDocumentTimeout > 0, "ESCL_TIMEOUT and ESCL_DOCUMENT_TIMEOUT must be positive")
 	check(c.PollInterval > 0, "POLL_INTERVAL must be positive")
+	check(c.PollMaxBackoff >= c.PollInterval, "POLL_MAX_BACKOFF must not be shorter than POLL_INTERVAL")
 	check(c.AutoscanSettle >= 0, "AUTOSCAN_SETTLE must not be negative")
 	check(c.ScanResolution > 0, "SCAN_RESOLUTION must be positive")
 	check(slices.Contains(colorModes, c.ScanColorMode), "SCAN_COLOR_MODE must be one of %v", colorModes)

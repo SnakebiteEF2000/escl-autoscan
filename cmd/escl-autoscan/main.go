@@ -95,6 +95,7 @@ func serve(cfg *config, log *slog.Logger) error {
 	}
 	svc := autoscan.New(autoscan.Config{
 		PollInterval:   cfg.PollInterval,
+		MaxBackoff:     cfg.PollMaxBackoff,
 		Settle:         cfg.AutoscanSettle,
 		Enabled:        cfg.AutoscanEnabled,
 		Paused:         cfg.AutoscanPaused,
