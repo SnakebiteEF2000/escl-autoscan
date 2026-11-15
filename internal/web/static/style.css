@@ -94,8 +94,8 @@ main > .note { margin: 0; }
 .scans li { padding: .6rem 0; border-top: 1px solid var(--line); }
 .scans li:first-child { border-top: 0; padding-top: 0; }
 .scans li:last-child { padding-bottom: 0; }
-.line { display: flex; flex-wrap: wrap; align-items: baseline; gap: .1rem 1rem; }
-.line time { font-variant-numeric: tabular-nums; min-width: 4.5rem; }
+.line { display: flex; flex-wrap: wrap; align-items: baseline; gap: .1rem .75rem; }
+.line time { font-variant-numeric: tabular-nums; }
 .file { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: .875rem; overflow-wrap: anywhere; }
 .scans .small { overflow-wrap: anywhere; }
 .result { margin-left: auto; font-weight: 600; color: var(--bad); }
