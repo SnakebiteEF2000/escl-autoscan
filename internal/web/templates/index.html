@@ -40,6 +40,15 @@
       <button type="submit" name="source" value="platen"{{if .Snap.Scanning}} disabled{{end}}>Scan flatbed</button>
     </div>
   </form>
+  {{if .Snap.DoubleSidedEnabled}}<form method="post" action="/double-sided" class="pause">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <p>{{if eq .Snap.DoubleSided 1}}<span class="dot warn"></span>Double-sided: insert the fronts ({{.DSRemaining}} left).
+    {{else if eq .Snap.DoubleSided 2}}<span class="dot warn"></span>Fronts saved — turn the stack over (as it came out, do not re-sort) and put it into the feeder again ({{.DSRemaining}} left).
+    {{else}}Double-sided: off{{end}}</p>
+    {{if .Snap.DoubleSidedNote}}<p class="banner error">{{.Snap.DoubleSidedNote}}</p>{{end}}
+    {{if .Snap.DoubleSided}}<button type="submit" name="action" value="cancel" class="secondary">Cancel double-sided</button>
+    {{else}}<button type="submit" name="action" value="start" class="secondary">Double-sided</button>{{end}}
+  </form>{{end}}
   {{if .Snap.AutoscanEnabled}}<form method="post" action="/pause" class="pause">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     {{if .Snap.Paused}}<button type="submit" name="action" value="resume" class="secondary">Resume autoscan</button>

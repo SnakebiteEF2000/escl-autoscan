@@ -11,6 +11,7 @@ import (
 	"html/template"
 	"io/fs"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"time"
@@ -30,6 +31,7 @@ type Scanner interface {
 	Snapshot() autoscan.Snapshot
 	Scan(source escl.InputSource, colorMode string) error
 	SetPaused(paused bool)
+	StartDoubleSided(start bool) error
 }
 
 // Config configures the UI.
@@ -126,6 +128,9 @@ func New(cfg Config, scanner Scanner, log *slog.Logger) (*Server, error) {
 	mux.HandleFunc("GET /{$}", s.handleIndex)
 	mux.HandleFunc("POST /scan", s.withPost(s.handleScan))
 	mux.HandleFunc("POST /pause", s.withPost(s.handlePause))
+	if scanner.Snapshot().DoubleSidedEnabled {
+		mux.HandleFunc("POST /double-sided", s.withPost(s.handleDoubleSided))
+	}
 	if s.oidc != nil {
 		mux.HandleFunc("GET /auth/login", s.handleLogin)
 		mux.HandleFunc("GET /auth/callback", s.handleCallback)
@@ -167,6 +172,8 @@ type pageData struct {
 	Gray    bool // preselect gray in the color choice
 	Error   string
 	Refresh int // seconds
+	// DSRemaining is the time left in the current double-sided step.
+	DSRemaining string
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -184,9 +191,13 @@ func (s *Server) renderIndex(w http.ResponseWriter, code int, sess *session, raw
 	if snap.Scanning != nil || snap.Settling {
 		refresh = 3
 	}
+	remaining := ""
+	if snap.DoubleSided != autoscan.DoubleSidedOff {
+		remaining = fmt.Sprintf("%d min", int(math.Ceil(max(time.Until(snap.DoubleSidedDeadline), 0).Minutes())))
+	}
 	s.render(w, code, "index.html", pageData{
 		Snap: snap, User: sess.display(), Auth: s.oidc != nil, CSRF: s.csrfToken(raw),
-		Gray: snap.ColorMode != "RGB24", Error: errMsg, Refresh: refresh,
+		Gray: snap.ColorMode != "RGB24", Error: errMsg, Refresh: refresh, DSRemaining: remaining,
 	})
 }
 
@@ -257,6 +268,25 @@ func (s *Server) handlePause(w http.ResponseWriter, r *http.Request, sess *sessi
 		return
 	}
 	s.log.Info("autoscan pause changed", "action", r.PostFormValue("action"), "user", sess.display())
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) handleDoubleSided(w http.ResponseWriter, r *http.Request, sess *session, _ string) {
+	var err error
+	switch r.PostFormValue("action") {
+	case "start":
+		err = s.scanner.StartDoubleSided(true)
+	case "cancel":
+		err = s.scanner.StartDoubleSided(false)
+	default:
+		s.renderError(w, http.StatusBadRequest, "Unknown action.")
+		return
+	}
+	if err != nil {
+		s.renderError(w, http.StatusConflict, "Double-sided: "+err.Error()+".")
+		return
+	}
+	s.log.Info("double-sided changed", "action", r.PostFormValue("action"), "user", sess.display())
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 

@@ -33,6 +33,21 @@ type fakeScanner struct {
 	busy   bool
 	paused bool
 	scans  []string
+	ds     int  // double-sided state
+	dsOn   bool // double-sided enabled
+}
+
+func (f *fakeScanner) StartDoubleSided(start bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.dsOn {
+		return autoscan.ErrDoubleSidedDisabled
+	}
+	f.ds = 0
+	if start {
+		f.ds = autoscan.DoubleSidedFronts
+	}
+	return nil
 }
 
 func (f *fakeScanner) Snapshot() autoscan.Snapshot {
@@ -40,6 +55,7 @@ func (f *fakeScanner) Snapshot() autoscan.Snapshot {
 	defer f.mu.Unlock()
 	return autoscan.Snapshot{Reachable: true, State: "Idle", AdfState: "ScannerAdfEmpty", AutoscanEnabled: true,
 		Armed: true, Paused: f.paused, ColorMode: "Grayscale8",
+		DoubleSidedEnabled: f.dsOn, DoubleSided: f.ds, DoubleSidedDeadline: time.Now().Add(29 * time.Minute),
 		History: []autoscan.Record{{Time: time.Unix(1_700_000_000, 0), Source: "feeder", Trigger: "auto", Pages: 3,
 			Result: "ok", Files: []string{"scan-20231114-221320.pdf"}}}}
 }
@@ -196,7 +212,12 @@ var testKey = []byte("0123456789abcdef0123456789abcdef")
 
 func newUI(t *testing.T, mod func(*Config, string)) *ui {
 	t.Helper()
-	u := &ui{t: t, scanner: &fakeScanner{}}
+	return newUIWith(t, &fakeScanner{}, mod)
+}
+
+func newUIWith(t *testing.T, fs *fakeScanner, mod func(*Config, string)) *ui {
+	t.Helper()
+	u := &ui{t: t, scanner: fs}
 	var h http.Handler
 	u.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.ServeHTTP(w, r) }))
 	t.Cleanup(u.Close)
@@ -622,5 +643,39 @@ func TestStringListClaim(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(`{"groups":42}`), &c); err == nil {
 		t.Error("numeric groups claim accepted")
+	}
+}
+
+func TestDoubleSided(t *testing.T) {
+	noAuth := func(c *Config, _ string) { c.NoAuth = true }
+
+	off := newUI(t, noAuth)
+	if _, body := off.page(); strings.Contains(body, "/double-sided") {
+		t.Error("double-sided button shown although the feature is off")
+	}
+	if code := off.post("/double-sided", url.Values{"csrf": {off.csrf()}, "action": {"start"}}, off.URL).StatusCode; code != http.StatusNotFound {
+		t.Errorf("POST /double-sided with the feature off: %d, want 404", code)
+	}
+
+	on := newUIWith(t, &fakeScanner{dsOn: true}, noAuth)
+	_, body := on.page()
+	if !strings.Contains(body, `action="/double-sided"`) || !strings.Contains(body, "Double-sided: off") {
+		t.Fatal("double-sided controls missing")
+	}
+	csrf := on.csrf()
+	if code := on.post("/double-sided", url.Values{"action": {"start"}}, on.URL).StatusCode; code != http.StatusForbidden {
+		t.Errorf("POST without CSRF: %d, want 403", code)
+	}
+	if code := on.post("/double-sided", url.Values{"csrf": {csrf}, "action": {"start"}}, "https://evil.example.com").StatusCode; code != http.StatusForbidden {
+		t.Errorf("cross-origin POST: %d, want 403", code)
+	}
+	if code := on.post("/double-sided", url.Values{"csrf": {csrf}, "action": {"start"}}, on.URL).StatusCode; code != http.StatusSeeOther {
+		t.Fatalf("start: %d", code)
+	}
+	if _, body := on.page(); !strings.Contains(body, "insert the fronts (29 min left)") || !strings.Contains(body, `value="cancel"`) {
+		t.Errorf("status line after start missing:\n%s", body)
+	}
+	if code := on.post("/double-sided", url.Values{"csrf": {csrf}, "action": {"cancel"}}, on.URL).StatusCode; code != http.StatusSeeOther {
+		t.Errorf("cancel: %d", code)
 	}
 }
