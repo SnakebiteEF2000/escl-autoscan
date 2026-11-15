@@ -13,6 +13,12 @@
   if (location.pathname !== "/") {
     history.replaceState(null, "", "/");
   }
+  // Its message is about one click. The page is not reloaded any more, so
+  // take the message away after a while.
+  var rejected = document.querySelector("[role=alert]");
+  if (rejected) {
+    setTimeout(function () { rejected.remove(); }, 12000);
+  }
 
   function apply(html) {
     var fresh = new DOMParser().parseFromString(html, "text/html");

@@ -1,14 +1,14 @@
 :root {
   --bg: #f5f5f4; --card: #ffffff; --fg: #1c1917; --muted: #6b645f; --line: #e7e5e4; --edge: #918a85;
   --accent: #2563eb; --accent-fg: #ffffff; --link: #1d4ed8;
-  --ok: #15803d; --warn: #b45309; --bad: #b91c1c; --idle: #78716c;
+  --ok: #15803d; --warn: #b45309; --bad: #b91c1c; --idle: #78716c; --busy: #2563eb;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #1c1917; --card: #292524; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c; --edge: #8a8480;
     --link: #93c5fd;
-    --ok: #4ade80; --warn: #fbbf24; --bad: #f87171; --idle: #a8a29e;
+    --ok: #4ade80; --warn: #fbbf24; --bad: #f87171; --idle: #a8a29e; --busy: #60a5fa;
   }
 }
 * { box-sizing: border-box; }
@@ -33,7 +33,7 @@ a { color: var(--link); }
 .hero { --tone: var(--idle); position: relative; border-radius: .75rem; padding: 1.1rem 1.25rem 1.1rem 2.9rem;
   background: color-mix(in srgb, var(--tone) 9%, var(--card));
   border: 1px solid color-mix(in srgb, var(--tone) 40%, var(--line)); }
-.hero.ok { --tone: var(--ok); } .hero.busy { --tone: var(--accent); }
+.hero.ok { --tone: var(--ok); } .hero.busy { --tone: var(--busy); }
 .hero.warn { --tone: var(--warn); } .hero.bad { --tone: var(--bad); }
 /* The dot belongs to the panel, not to its content, which is replaced while
    a scan runs: so the pulse is not restarted. */
@@ -44,7 +44,7 @@ a { color: var(--link); }
 @media (prefers-reduced-motion: reduce) { .hero.busy::before { animation: none; } }
 .hero h2 { font-size: 1.5rem; line-height: 1.25; margin: 0 0 .35rem; }
 .hero > p { max-width: 36rem; }
-.facts { display: flex; flex-wrap: wrap; gap: .25rem 1.75rem; margin: .9rem 0 0; font-size: .875rem; }
+.facts { display: flex; flex-wrap: wrap; gap: .25rem 1.25rem; margin: .9rem 0 0; font-size: .875rem; }
 .facts div { display: flex; gap: .4rem; }
 .facts dt { color: var(--muted); }
 .facts dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
