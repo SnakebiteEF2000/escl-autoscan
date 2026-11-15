@@ -24,6 +24,10 @@ type Options struct {
 	// Image puts an image XObject (DCTDecode) on every page, as a scanner
 	// does. Its data is Image followed by "page N", so it differs per page.
 	Image []byte
+	// Inherit, with Image, puts the MediaBox and the image resources on the
+	// page tree node instead of on every page, as scanners often do. All
+	// pages are then Width wide.
+	Inherit bool
 	// Labels prints one line of text on each page, for PDFs that people
 	// look at (the scanner simulator). It sets the number of pages.
 	Labels []string
@@ -87,7 +91,15 @@ func New(o Options) []byte {
 	for i := range o.Pages {
 		kids += fmt.Sprintf("%d 0 R ", first+per*i)
 	}
-	obj(fmt.Sprintf("<< %s /Kids [%s] /Count %d >>", typ("Pages"), kids, o.Pages))
+	inherited := ""
+	if o.Inherit && o.Image != nil {
+		images := ""
+		for i := range o.Pages {
+			images += fmt.Sprintf("/Im%d %d 0 R ", i, first+per*i+2)
+		}
+		inherited = fmt.Sprintf(" /MediaBox [0 0 %d 842] /Resources << /XObject << %s>> >>", max(o.Width, 1), images)
+	}
+	obj(fmt.Sprintf("<< %s /Kids [%s] /Count %d%s >>", typ("Pages"), kids, o.Pages, inherited))
 	if o.Labels != nil {
 		obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>")
 	}
@@ -103,9 +115,15 @@ func New(o Options) []byte {
 			content := fmt.Sprintf("BT /F1 44 Tf 60 720 Td (%s) Tj ET\n", pdfString.Replace(o.Labels[i]))
 			obj(fmt.Sprintf("<< /Length %d >>\nstream\n%sendstream", len(content), content))
 		case o.Image != nil:
-			obj(fmt.Sprintf("<< %s /Parent 2 0 R /MediaBox [0 0 %d 842] /Contents %d 0 R /Resources << /XObject << /Im0 %d 0 R >> >> >>",
-				typ("Page"), width, n+1, n+2))
-			content := fmt.Sprintf("q %d 0 0 842 0 0 cm /Im0 Do Q\n", width)
+			name := "Im0"
+			if inherited != "" {
+				name = fmt.Sprintf("Im%d", i)
+				obj(fmt.Sprintf("<< %s /Parent 2 0 R /Contents %d 0 R >>", typ("Page"), n+1))
+			} else {
+				obj(fmt.Sprintf("<< %s /Parent 2 0 R /MediaBox [0 0 %d 842] /Contents %d 0 R /Resources << /XObject << /Im0 %d 0 R >> >> >>",
+					typ("Page"), width, n+1, n+2))
+			}
+			content := fmt.Sprintf("q %d 0 0 842 0 0 cm /%s Do Q\n", width, name)
 			obj(fmt.Sprintf("<< /Length %d >>\nstream\n%sendstream", len(content), content))
 			data := o.ImageData(i + 1)
 			obj(fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width 8 /Height 8 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /DCTDecode /Length %d >>\nstream\n%s\nendstream",

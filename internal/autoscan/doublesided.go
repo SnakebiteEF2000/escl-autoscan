@@ -227,7 +227,11 @@ func (s *Service) collateBacks(rec *Record, docs [][]byte) {
 
 	pdf, pages, err := collate.Interleave(fronts.docs, docs)
 	if err == nil {
-		_, err = output.ValidatePDF(pdf)
+		// Check the result like a scan, and count its pages a second way.
+		var n int
+		if n, err = output.ValidatePDF(pdf); err == nil && n != pages {
+			err = fmt.Errorf("the collated PDF has %d pages instead of %d", n, pages)
+		}
 	}
 	var mismatch *collate.PageCountError
 	switch {

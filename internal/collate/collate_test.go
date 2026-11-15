@@ -2,9 +2,14 @@ package collate
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 	"testing"
+
+	"github.com/pdfcpu/pdfcpu/pkg/api"
 
 	"github.com/SnakebiteEF2000/escl-autoscan/internal/output"
 	"github.com/SnakebiteEF2000/escl-autoscan/internal/pdftest"
@@ -83,6 +88,85 @@ func TestInterleaveKeepsImageData(t *testing.T) {
 	}
 	if n, err := output.ValidatePDF(out); err != nil || n != 4 {
 		t.Errorf("ValidatePDF = %d, %v", n, err)
+	}
+}
+
+// Scanners often put the page size and the images on the page tree node,
+// from where the pages inherit them. They must not get lost or mixed up when
+// the pages of two documents are put into a new tree.
+func TestInterleaveInheritedPageAttributes(t *testing.T) {
+	for _, xrefStream := range []bool{false, true} {
+		fronts := pdftest.Options{Pages: 3, Width: 100, Image: []byte("\xff\xd8 fronts \xff\xd9"), Inherit: true, XRefStream: xrefStream}
+		backs := pdftest.Options{Pages: 3, Width: 200, Image: []byte("\xff\xd8 backs \xff\xd9"), Inherit: true, XRefStream: xrefStream}
+		out, pages, err := Interleave([][]byte{pdftest.New(fronts)}, [][]byte{pdftest.New(backs)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := fmt.Sprint(widths(t, out)), "[100 200 100 200 100 200]"; got != want || pages != 6 {
+			t.Errorf("pages = %d, widths %s, want 6, %s", pages, got, want)
+		}
+		// Page order by the image each page draws: fronts 1-3 with backs 3-1.
+		if got, want := fmt.Sprint(drawnImages(t, out)), fmt.Sprint([]string{
+			string(fronts.ImageData(1)), string(backs.ImageData(3)), string(fronts.ImageData(2)),
+			string(backs.ImageData(2)), string(fronts.ImageData(3)), string(backs.ImageData(1))}); got != want {
+			t.Errorf("images in page order:\n got %q\nwant %q", got, want)
+		}
+		if n, err := output.ValidatePDF(out); err != nil || n != 6 {
+			t.Errorf("ValidatePDF = %d, %v", n, err)
+		}
+	}
+}
+
+// drawnImages returns, for every page in order, the data of the image that
+// the page's content stream draws, resolved through the page's resources as
+// a PDF viewer would.
+func drawnImages(t *testing.T, pdf []byte) []string {
+	t.Helper()
+	c := context.Background()
+	ctx, err := api.ReadAndValidate(c, bytes.NewReader(pdf), config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for page := 1; page <= ctx.PageCount; page++ {
+		d, _, inh, err := ctx.PageDict(c, page, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, err := ctx.PageContent(d, page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := regexp.MustCompile(`/(Im\d+) Do`).FindSubmatch(content)
+		if m == nil {
+			t.Fatalf("page %d draws no image: %q", page, content)
+		}
+		res := inh.Resources
+		if obj, ok := d.Find("Resources"); ok {
+			if res, err = ctx.DereferenceDict(obj); err != nil {
+				t.Fatal(err)
+			}
+		}
+		xobjects, err := ctx.DereferenceDict(res["XObject"])
+		if err != nil || xobjects == nil {
+			t.Fatalf("page %d has no XObject resources (%v)", page, err)
+		}
+		sd, _, err := ctx.DereferenceStreamDict(xobjects[string(m[1])])
+		if err != nil || sd == nil {
+			t.Fatalf("page %d: image %s not found (%v)", page, m[1], err)
+		}
+		out = append(out, string(sd.Raw))
+	}
+	return out
+}
+
+func TestPanicBecomesAnError(t *testing.T) {
+	f := func() (err error) {
+		defer recovered(&err)
+		panic("boom")
+	}
+	if err := f(); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

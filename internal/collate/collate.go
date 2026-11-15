@@ -47,9 +47,9 @@ func config() *model.Configuration {
 
 // Pages returns the total number of pages of docs. An error means that
 // pdfcpu cannot read one of them, so they cannot be collated.
-func Pages(docs [][]byte) (int, error) {
+func Pages(docs [][]byte) (total int, err error) {
+	defer recovered(&err)
 	conf := config()
-	total := 0
 	for i, doc := range docs {
 		n, err := api.PageCount(context.Background(), bytes.NewReader(doc), conf)
 		if err != nil {
@@ -60,6 +60,15 @@ func Pages(docs [][]byte) (int, error) {
 	return total, nil
 }
 
+// recovered turns a panic into an error. pdfcpu reports some failures by
+// panicking and catches that only in its api package. A panic that got out
+// would end the process, and with it the fronts held in memory.
+func recovered(err *error) {
+	if r := recover(); r != nil {
+		*err = fmt.Errorf("collate: pdfcpu panicked: %v", r)
+	}
+}
+
 // Interleave merges the fronts and the backs of a stack into one PDF: the
 // pages of fronts in order, each followed by the matching page of backs,
 // which are taken in reverse order. A pass may consist of several documents
@@ -67,7 +76,8 @@ func Pages(docs [][]byte) (int, error) {
 //
 // It returns the PDF and its page count, or a *PageCountError when the passes
 // do not have the same number of pages.
-func Interleave(fronts, backs [][]byte) ([]byte, int, error) {
+func Interleave(fronts, backs [][]byte) (pdf []byte, pages int, err error) {
+	defer recovered(&err)
 	if len(fronts) == 0 || len(backs) == 0 {
 		return nil, 0, errors.New("collate: missing pass")
 	}
