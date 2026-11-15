@@ -324,8 +324,21 @@ func TestLoginFlowWithPKCE(t *testing.T) {
 	}
 
 	u.scanner.setBusy(true)
-	if resp := u.post("/scan", url.Values{"csrf": {csrf}, "source": {"feeder"}}, u.URL); resp.StatusCode != http.StatusConflict {
-		t.Errorf("busy scan: %d, want 409", resp.StatusCode)
+	req, _ := http.NewRequest(http.MethodPost, u.URL+"/scan", strings.NewReader(url.Values{"csrf": {csrf}, "source": {"feeder"}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", u.URL)
+	busy, err := u.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	busyBody, _ := io.ReadAll(busy.Body)
+	busy.Body.Close()
+	if busy.StatusCode != http.StatusConflict || !strings.Contains(string(busyBody), "already running") {
+		t.Errorf("busy scan: %d, want 409 with message", busy.StatusCode)
+	}
+	// The 409 page is served at /scan; its refresh must go to /, not GET /scan.
+	if !strings.Contains(string(busyBody), `content="30; url=/"`) {
+		t.Errorf("busy page refresh does not target /")
 	}
 
 	if resp := u.post("/auth/logout", url.Values{"csrf": {csrf}}, u.URL); resp.StatusCode != http.StatusOK {
