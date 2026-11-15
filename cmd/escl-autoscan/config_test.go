@@ -169,3 +169,46 @@ func TestServeRejectsFailedDirInsideOutput(t *testing.T) {
 		t.Fatalf("serve: err = %v", err)
 	}
 }
+
+func TestDoubleSidedConfig(t *testing.T) {
+	c, err := parseConfig(nil, env(minimal), io.Discard)
+	if err != nil || c.DoubleSidedSubdir != "double-sided" || c.DoubleSidedTimeout != 30*time.Minute {
+		t.Fatalf("defaults: %+v, %v", c, err)
+	}
+	if c, err := parseConfig(nil, env(with(map[string]string{"DOUBLE_SIDED_SUBDIR": ""})), io.Discard); err != nil || c.DoubleSidedSubdir != "" {
+		t.Errorf("empty subdir (off): %v", err)
+	}
+	for _, bad := range []string{"a/b", "/abs", ".", "..", ".hidden", `a\b`} {
+		if _, err := parseConfig(nil, env(with(map[string]string{"DOUBLE_SIDED_SUBDIR": bad})), io.Discard); err == nil || !strings.Contains(err.Error(), "DOUBLE_SIDED_SUBDIR") {
+			t.Errorf("subdir %q: err = %v", bad, err)
+		}
+	}
+	if _, err := parseConfig(nil, env(with(map[string]string{"DOUBLE_SIDED_TIMEOUT": "0s"})), io.Discard); err == nil {
+		t.Error("zero timeout accepted")
+	}
+}
+
+func TestPrepareDirsCreatesDoubleSidedFolder(t *testing.T) {
+	out := t.TempDir()
+	c, err := parseConfig(nil, env(map[string]string{"ESCL_URL": "https://192.0.2.10", "OUTPUT_DIR": out, "DOUBLE_SIDED_SUBDIR": "duplex"}), io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareDirs(c); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(filepath.Join(out, "duplex")); err != nil || !fi.IsDir() {
+		t.Fatalf("double-sided folder not created: %v", err)
+	}
+	if err := prepareDirs(c); err != nil {
+		t.Errorf("second start: %v", err)
+	}
+	// A file in the way is a clear startup error.
+	c.DoubleSidedSubdir = "blocked"
+	if err := os.WriteFile(filepath.Join(out, "blocked"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareDirs(c); err == nil || !strings.Contains(err.Error(), "DOUBLE_SIDED_SUBDIR") {
+		t.Errorf("blocked folder: err = %v", err)
+	}
+}

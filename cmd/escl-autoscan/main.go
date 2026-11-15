@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 	_ "time/tzdata" // TZ works in a distroless image without zoneinfo
@@ -68,7 +69,7 @@ func newLogger(w io.Writer, cfg *config) *slog.Logger {
 }
 
 func serve(cfg *config, log *slog.Logger) error {
-	if err := output.CheckDirs(cfg.OutputDir, cfg.FailedDir, cfg.BacklogDir); err != nil {
+	if err := prepareDirs(cfg); err != nil {
 		return err
 	}
 	dev, err := escl.New(escl.Options{
@@ -104,6 +105,9 @@ func serve(cfg *config, log *slog.Logger) error {
 		Resolution:     cfg.ScanResolution,
 		Region:         escl.Region{XOffset: cfg.ScanXOffset, Width: cfg.ScanWidth, Height: cfg.ScanHeight},
 		WakeWorkaround: cfg.WakeWorkaround,
+
+		DoubleSidedSubdir:  cfg.DoubleSidedSubdir,
+		DoubleSidedTimeout: cfg.DoubleSidedTimeout,
 	}, dev, &output.Writer{Dir: cfg.OutputDir, Location: cfg.location, Log: log}, failed, m, log)
 
 	var ui *web.Server
@@ -144,7 +148,8 @@ func serve(cfg *config, log *slog.Logger) error {
 		"resolution", cfg.ScanResolution, "color_mode", cfg.ScanColorMode,
 		"region", fmt.Sprintf("x=%d w=%d h=%d", cfg.ScanXOffset, cfg.ScanWidth, cfg.ScanHeight),
 		"ui", cfg.UIEnabled, "ui_addr", cfg.HTTPAddr, "metrics_addr", cfg.MetricsAddr,
-		"oidc_issuer", cfg.OIDCIssuer, "wake_workaround", cfg.WakeWorkaround)
+		"oidc_issuer", cfg.OIDCIssuer, "wake_workaround", cfg.WakeWorkaround,
+		"double_sided_subdir", cfg.DoubleSidedSubdir, "double_sided_timeout", cfg.DoubleSidedTimeout)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
@@ -180,6 +185,21 @@ func serve(cfg *config, log *slog.Logger) error {
 	shutdownHTTP(metricsSrv)
 	log.Info("stopped")
 	return serveErr
+}
+
+// prepareDirs checks the directories and creates the double-sided folder,
+// which Paperless does not create itself.
+func prepareDirs(cfg *config) error {
+	if err := output.CheckDirs(cfg.OutputDir, cfg.FailedDir, cfg.BacklogDir); err != nil {
+		return err
+	}
+	if cfg.DoubleSidedSubdir == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Join(cfg.OutputDir, cfg.DoubleSidedSubdir), 0o755); err != nil {
+		return fmt.Errorf("create double-sided folder (DOUBLE_SIDED_SUBDIR): %w", err)
+	}
+	return nil
 }
 
 func oidcConfig(cfg *config) *web.OIDCConfig {

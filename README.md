@@ -115,6 +115,8 @@ them all.
 | `SCAN_HEIGHT` | `3508` | Scan height in 1/300 inch (3508 = A4, 3300 = Letter). |
 | `SCAN_X_OFFSET` | `0` | Horizontal offset in 1/300 inch. |
 | `OUTPUT_DIR` | *(required)* | Where finished PDFs go, e.g. `<consume>/scanner`. |
+| `DOUBLE_SIDED_SUBDIR` | `double-sided` | Folder below `OUTPUT_DIR` for [double-sided](#double-sided-originals-with-paperless) passes; created at startup. One plain folder name (no `/`, not `.`/`..`, no leading dot). Empty turns the feature off and hides the button. |
+| `DOUBLE_SIDED_TIMEOUT` | `30m` | Double-sided mode ends if the next pass does not arrive in time; counted from starting the mode and again from the fronts. Matches Paperless' 30-minute window. |
 | `FAILED_DIR` | *(discard)* | Keep rejected and partial scans here. Must be outside `OUTPUT_DIR` and `BACKLOG_DIR`; this is checked at startup. |
 | `BACKLOG_DIR` | | Paperless consume root. Enables the backlog metrics. |
 | `TZ` | `UTC` | Time zone for file names and the UI, e.g. `Europe/Berlin`. The zone database is built in. |
@@ -154,11 +156,63 @@ All metrics are on `METRICS_ADDR` with the prefix `escl_autoscan_`:
 | `pages_total` | Pages delivered. |
 | `last_success_timestamp_seconds` | Time of the last delivered scan. |
 | `scan_duration_seconds` | Histogram of job durations. |
+| `double_sided_state` | 0 off, 1 waiting for the fronts, 2 waiting for the backs. |
+| `double_sided_total{result}` | Finished double-sided runs: `delivered`, `timeout`, `cancelled` (by the user) or `failed` (a pass failed). |
 | `backlog_files`, `backlog_oldest_age_seconds` | Only with `BACKLOG_DIR`. Counts consumable files (`.pdf .png .jpg .jpeg .tif .tiff .webp .txt .eml`) below the consume root, every 60s. `.part` files and dotfiles are ignored. A growing age means Paperless is not consuming. |
 
 `/healthz` reports that the process is alive. `/readyz` checks that
 `OUTPUT_DIR` is reachable. Neither depends on the scanner, because a sleeping
 printer is normal.
+
+## Double-sided originals with Paperless
+
+The WF-2960 feeder scans one side only. Paperless-ngx can collate two
+single-sided passes into one document: it parks the first file from a folder
+named `double-sided` (the fronts), and when a second file arrives there
+within 30 minutes (the backs), it reverses the second file's pages,
+interleaves them with the fronts and consumes the result. Enable it in
+Paperless; it also needs `PAPERLESS_CONSUMER_RECURSIVE=true`:
+
+```sh
+PAPERLESS_CONSUMER_ENABLE_COLLATE_DOUBLE_SIDED=true
+```
+
+`DOUBLE_SIDED_SUBDIR` must match Paperless' folder name
+(`PAPERLESS_CONSUMER_COLLATE_DOUBLE_SIDED_SUBDIR_NAME`, default
+`double-sided`). escl-autoscan creates `OUTPUT_DIR/double-sided` at startup;
+Paperless does not create it.
+
+1. Press **Double-sided** in the UI. The status line says "insert the
+   fronts".
+2. Put the stack into the feeder. The next successful feeder scan, automatic
+   or via "Scan feeder", goes to `OUTPUT_DIR/double-sided/`.
+3. Take the stack out of the output tray as it is, turn it over without
+   re-sorting, and put it back into the feeder. Paperless reverses the second
+   pass itself. With autoscan on, the stack must count as new: the feeder has
+   to report empty between the passes, which it does when you take the paper
+   out. With autoscan paused, press "Scan feeder" for each pass.
+4. The second successful feeder scan also goes to the folder, and the mode
+   switches off ("double-sided pair delivered"). The next scan is normal again.
+
+Details:
+
+- Flatbed scans always go to the normal output and do not change the mode.
+- The mode times out after `DOUBLE_SIDED_TIMEOUT`, counted from pressing the
+  button and again from the fronts. The next scan then goes to the normal
+  output.
+- If a feeder pass fails (`aborted`, `incomplete_pdf`, `error`, or
+  `wake_glitch` without a successful retry), the mode is cancelled and the
+  failed scan never goes to the folder. If this happens on the backs, the
+  fronts are already parked in Paperless; Paperless pairs them with the next
+  double-sided file within 30 minutes and discards them after that. So either
+  start double-sided again and scan **only the backs**, or wait 30 minutes
+  before scanning both passes again. The UI shows this. A busy scanner or a
+  skipped autoscan does not count as a failed pass.
+- A feeder job that returns more than one document cannot be one pass of a
+  pair; its files go to the normal output and the mode is cancelled. (The
+  WF-2960 returns one PDF per job.)
+- "Cancel double-sided" ends the mode at any time.
+- The mode lives in memory. A restart turns it off.
 
 ## Epson notes
 
