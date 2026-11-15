@@ -6,6 +6,7 @@
   "use strict";
 
   var INTERVAL = 2000;
+  var TIMEOUT = 8000;
   var timer = null;
   var stale = document.getElementById("stale");
 
@@ -22,6 +23,20 @@
 
   function apply(html) {
     var fresh = new DOMParser().parseFromString(html, "text/html");
+    if (!fresh.querySelector("[data-live]")) {
+      // Not our page: an error page or the login page of a proxy.
+      throw new Error("unexpected page");
+    }
+    // The forms outside the live parts need the current token too: it
+    // changes with the session, and without login when the service restarts.
+    var token = fresh.querySelector('input[name="csrf"]');
+    if (token) {
+      document.querySelectorAll('input[name="csrf"]').forEach(function (input) {
+        if (input.value !== token.value) {
+          input.value = token.value;
+        }
+      });
+    }
     document.querySelectorAll("[data-live]").forEach(function (old) {
       var now = fresh.querySelector('[data-live="' + old.dataset.live + '"]');
       if (!now) {
@@ -50,7 +65,10 @@
   }
 
   function refresh() {
-    fetch("/", { credentials: "same-origin", redirect: "manual", cache: "no-store" })
+    // A request that hangs must not stop the updates for good.
+    var abort = new AbortController();
+    var giveUp = setTimeout(function () { abort.abort(); }, TIMEOUT);
+    fetch("/", { credentials: "same-origin", redirect: "manual", cache: "no-store", signal: abort.signal })
       .then(function (resp) {
         if (resp.type === "opaqueredirect") {
           // The session has expired: let the browser go through the login.
@@ -71,7 +89,10 @@
       .catch(function () {
         show(stale, true);
       })
-      .then(schedule);
+      .then(function () {
+        clearTimeout(giveUp);
+        schedule();
+      });
   }
 
   document.addEventListener("visibilitychange", function () {

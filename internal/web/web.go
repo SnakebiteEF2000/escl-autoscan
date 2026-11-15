@@ -207,7 +207,7 @@ func (s *Server) renderIndex(w http.ResponseWriter, code int, sess *session, raw
 		Gray: snap.ColorMode != "RGB24", Error: errMsg, Refresh: refresh,
 		Auto:        snap.AutoscanEnabled && !snap.Paused,
 		FeederBusy:  snap.Scanning != nil && snap.Scanning.Source == "feeder",
-		DSRemaining: span(snap.DoubleSidedDeadline.Sub(now)),
+		DSRemaining: minutes(snap.DoubleSidedDeadline.Sub(now)),
 	})
 }
 

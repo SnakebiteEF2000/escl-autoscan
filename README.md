@@ -159,7 +159,7 @@ All metrics are on `METRICS_ADDR` with the prefix `escl_autoscan_`:
 | `armed`, `paused` | Autoscan state. |
 | `scans_total{source,result}` | `source` is `feeder` or `platen`. `result` is one of `ok`, `aborted`, `incomplete_pdf`, `busy`, `error`, `wake_glitch` or `skipped`. |
 | `pages_total` | Pages of successful scans. Each pass of a double-sided scan counts its own pages. |
-| `last_success_timestamp_seconds` | Time of the last delivered scan. |
+| `last_success_timestamp_seconds` | Time of the last successful scan. Fronts held for a double-sided scan count. |
 | `scan_duration_seconds` | Histogram of job durations. |
 | `double_sided_state` | 0 off, 1 waiting for the fronts, 2 holding the fronts and waiting for the backs. |
 | `double_sided_total{result}` | Finished double-sided runs: `delivered` (one collated PDF), `timeout` (held fronts were saved single-sided), `cancelled` (by the user; held fronts were discarded) or `failed` (the PDFs could not be collated and were delivered as they are). |
@@ -193,21 +193,29 @@ What happens when something goes wrong:
 - **A pass fails** (jam, aborted job, incomplete PDF, busy scanner): the mode
   stays on and held fronts stay. Clear the feeder, put the stack back and
   the pass is scanned again.
-- **Fronts and backs differ in page count**, usually because the feeder
-  pulled two sheets at once: nothing is delivered and the fronts stay. Scan
-  the backs again, or cancel and start over if the fronts were the short
-  pass. The mismatched backs go to `FAILED_DIR`.
+- **The second scan has another page count than the fronts**, usually
+  because the feeder pulled two sheets at once: it cannot be their backs, so
+  nothing is collated and the fronts stay. Scan the backs again, or cancel
+  and start over if the fronts were the short pass. The scan itself is
+  valid (it may also be a letter somebody scanned in between), so it is
+  delivered as a normal single-sided scan and the page names the file;
+  delete it in Paperless if it was meant to be the backs.
 - **Cancel** ends the mode and discards held fronts; the button says so.
 - **Timeout** (`DOUBLE_SIDED_TIMEOUT`, 30 minutes per step) and **shutdown**
   never discard: held fronts are saved as a normal single-sided scan. You
-  may have walked away believing the document was scanned. If `OUTPUT_DIR`
-  cannot be written at that moment, they go to `FAILED_DIR`, like any scan
-  that cannot be delivered.
+  may have walked away believing the document was scanned. The timeout
+  waits for a stack that is already detected in the feeder. If `OUTPUT_DIR`
+  cannot be written when the time is up, the fronts stay held and the time
+  starts again; at shutdown they go to `FAILED_DIR` instead.
 - **The PDFs cannot be collated**: pdfcpu reads and rewrites the scanner's
   PDFs. If it cannot read one, the scan is not lost: the fronts are checked
   when they arrive and delivered as a normal scan if they are unreadable,
   and if collating fails later, fronts and backs are delivered unchanged as
   two files. The page and the log say why.
+
+The rule behind all of these: a scan that passed validation is never thrown
+away because of double-sided mode. It is held, collated, or delivered as a
+normal scan. Only cancelling discards, and only the held fronts.
 
 Details:
 

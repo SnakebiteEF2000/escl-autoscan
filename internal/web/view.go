@@ -150,6 +150,13 @@ func span(d time.Duration) string {
 	return fmt.Sprintf("%d min", int(math.Ceil(d.Minutes())))
 }
 
+// minutes formats the time left in a double-sided step. It changes once a
+// minute only: the page replaces a part whenever its text changes, and this
+// part has a button in it.
+func minutes(d time.Duration) string {
+	return fmt.Sprintf("%d min", int(math.Ceil(max(d, 0).Minutes())))
+}
+
 func pageCount(n int) string {
 	if n == 1 {
 		return "1 page"

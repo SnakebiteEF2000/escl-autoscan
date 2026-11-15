@@ -12,6 +12,9 @@
 #
 #   ESCL_URL=https://192.0.2.10 docker compose up --build -d escl-autoscan
 #
+# That does not verify the scanner's certificate. To pin it instead, add
+# ESCL_TLS_INSECURE=false ESCL_TLS_FINGERPRINT=<sha-256 fingerprint>.
+#
 # Only one escl-autoscan should watch a scanner. If another instance is
 # running, add AUTOSCAN_PAUSED=true here or pause that one.
 services:

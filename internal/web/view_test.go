@@ -86,6 +86,14 @@ func TestLabels(t *testing.T) {
 			t.Errorf("resultLabel(%+v) = %q, want %q", r, got, want)
 		}
 	}
+	// The time left in a double-sided step changes once a minute only.
+	for d, want := range map[time.Duration]string{
+		-time.Second: "0 min", time.Second: "1 min", 61 * time.Second: "2 min", 30 * time.Minute: "30 min",
+	} {
+		if got := minutes(d); got != want {
+			t.Errorf("minutes(%v) = %q, want %q", d, got, want)
+		}
+	}
 	for d, want := range map[time.Duration]string{
 		-time.Second: "0 s", 10 * time.Second: "10 s", 89 * time.Second: "89 s",
 		90 * time.Second: "2 min", 29*time.Minute + 30*time.Second: "30 min",
