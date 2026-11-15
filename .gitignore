@@ -1,0 +1,10 @@
+# Binaries
+/escl-autoscan
+/dist/
+*.test
+*.out
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
