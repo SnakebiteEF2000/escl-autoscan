@@ -217,7 +217,7 @@ func (s *Service) save(state int, held *heldPages, placeholder Note, result, why
 		message = "flatbed document, pages not joined: " + joinErr.Error()
 	default:
 		note.Text = fmt.Sprintf("%sFlatbed document saved: %s (%s).", why, strings.Join(files, ", "), plural(held.pages, "page"))
-		message = "flatbed document"
+		message = "" // the row already says "flatbed document"
 		if why == "" {
 			note.Kind = NoteOK
 		}
