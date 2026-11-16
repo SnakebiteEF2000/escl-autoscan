@@ -15,17 +15,11 @@ import (
 	"github.com/SnakebiteEF2000/escl-autoscan/internal/pdftest"
 )
 
-// A flatbed document: pages scanned one by one on the glass, saved as one
-// PDF in the order they were scanned.
+// A flatbed document: double-sided mode whose first scan came from the
+// flatbed. Pages scanned one by one on the glass are saved as one PDF in the
+// order they were scanned.
 
-func (h *harness) startFlatbed() {
-	h.t.Helper()
-	if err := h.svc.StartDoubleSided(escl.Platen); err != nil {
-		h.t.Fatal(err)
-	}
-}
-
-// held reports that the flatbed document is open with the given pages.
+// held reports that a flatbed document is open with the given pages.
 func (h *harness) held(pages int) bool {
 	s := h.svc.Snapshot()
 	return s.DoubleSided == DoubleSidedFlatbed && s.DoubleSidedHeld == pages
@@ -33,9 +27,9 @@ func (h *harness) held(pages int) bool {
 
 func TestFlatbedDocument(t *testing.T) {
 	h, _ := dsHarness(t)
-	h.startFlatbed()
-	if !h.held(0) || h.metric("escl_autoscan_double_sided_state") != 3 {
-		t.Fatalf("after start: %+v", h.svc.Snapshot())
+	h.start()
+	if s := h.svc.Snapshot(); s.DoubleSided != DoubleSidedWaiting {
+		t.Fatalf("after start: %+v", s)
 	}
 
 	for i, width := range []int{100, 200, 300} {
@@ -43,6 +37,9 @@ func TestFlatbedDocument(t *testing.T) {
 		if rec.Result != metrics.ResultOK || !rec.DoubleSided || len(rec.Files) != 0 || !h.held(i+1) || len(pdfs(t, h.out)) != 0 {
 			t.Fatalf("page %d: %+v, snapshot %+v, output %v", i+1, rec, h.svc.Snapshot(), pdfs(t, h.out))
 		}
+	}
+	if h.metric("escl_autoscan_double_sided_state") != 3 {
+		t.Errorf("double_sided_state = %v, want 3", h.metric("escl_autoscan_double_sided_state"))
 	}
 
 	if err := h.svc.FinishDoubleSided(); err != nil {
@@ -76,7 +73,7 @@ func TestFlatbedDocument(t *testing.T) {
 // One page needs no joining: it is delivered exactly as scanned.
 func TestFlatbedDocumentOfOnePage(t *testing.T) {
 	h, _ := dsHarness(t)
-	h.startFlatbed()
+	h.start()
 	page := stack(1, 100)
 	h.pass(escl.Platen, page)
 	if err := h.svc.FinishDoubleSided(); err != nil {
@@ -87,10 +84,11 @@ func TestFlatbedDocumentOfOnePage(t *testing.T) {
 		t.Errorf("the page was rewritten (%v)", err)
 	}
 
-	// Saving without a page just ends the run.
-	h.startFlatbed()
-	if err := h.svc.FinishDoubleSided(); err != nil || h.svc.Snapshot().DoubleSided != DoubleSidedOff || len(pdfs(t, h.out)) != 1 {
-		t.Errorf("saving an empty document: %v, %+v", err, h.svc.Snapshot())
+	// Saving is for a flatbed document with pages; before the first scan it
+	// does nothing.
+	h.start()
+	if err := h.svc.FinishDoubleSided(); err != nil || h.svc.Snapshot().DoubleSided != DoubleSidedWaiting || len(pdfs(t, h.out)) != 1 {
+		t.Errorf("saving before the first scan: %v, %+v", err, h.svc.Snapshot())
 	}
 }
 
@@ -98,7 +96,7 @@ func TestFlatbedDocumentOfOnePage(t *testing.T) {
 // delivered as usual and leaves the held pages alone.
 func TestFlatbedDocumentIgnoresFeederScans(t *testing.T) {
 	h, _ := dsHarness(t)
-	h.startFlatbed()
+	h.start()
 	h.pass(escl.Platen, stack(1, 100))
 
 	letter := h.pass(escl.Feeder, stack(2, 500))
@@ -122,15 +120,16 @@ func TestFlatbedDocumentIgnoresFeederScans(t *testing.T) {
 	}
 }
 
-// One run at a time, and none of them changes while its scan runs.
-func TestFlatbedDocumentAndFeederRunExcludeEachOther(t *testing.T) {
+// The first scan after switching on decides what the document is. After that
+// the other source does not take part, and nothing changes while a scan that
+// takes part runs.
+func TestDoubleSidedFirstScanDecides(t *testing.T) {
 	h, _ := dsHarness(t)
-	h.startFlatbed()
-	if err := h.svc.StartDoubleSided(escl.Feeder); !errors.Is(err, ErrDoubleSidedActive) {
-		t.Errorf("feeder run during a flatbed document: err = %v", err)
+	if err := h.svc.StartDoubleSided(); err != nil {
+		t.Fatal(err)
 	}
-	if err := h.svc.StartDoubleSided(escl.Platen); err != nil {
-		t.Errorf("starting twice: %v", err)
+	if err := h.svc.StartDoubleSided(); err != nil {
+		t.Errorf("switching on twice: %v", err)
 	}
 
 	slow := stack(1, 100)
@@ -139,34 +138,62 @@ func TestFlatbedDocumentAndFeederRunExcludeEachOther(t *testing.T) {
 	if err := h.svc.Scan(escl.Platen, ""); err != nil {
 		t.Fatal(err)
 	}
-	if cur := h.svc.Snapshot().Scanning; cur == nil || cur.Pass != DoubleSidedFlatbed {
-		t.Fatalf("running pass = %+v", cur)
+	if cur := h.svc.Snapshot().Scanning; cur == nil || cur.Pass != DoubleSidedWaiting {
+		t.Fatalf("running pass = %+v, want the first scan of the document", cur)
 	}
-	if err := h.svc.FinishDoubleSided(); !errors.Is(err, ErrBusy) {
-		t.Errorf("saving while a page is scanned: err = %v", err)
+	if err := h.svc.FinishDoubleSided(); err != nil || h.svc.Snapshot().DoubleSided != DoubleSidedWaiting {
+		t.Errorf("saving before a page is held: %v", err)
 	}
-	if err := h.svc.CancelDoubleSided(); !errors.Is(err, ErrBusy) {
-		t.Errorf("cancelling while a page is scanned: err = %v", err)
+	for _, discard := range []bool{false, true} {
+		if err := h.svc.CancelDoubleSided(discard); !errors.Is(err, ErrBusy) {
+			t.Errorf("switching off (discard %v) while the first page is scanned: err = %v", discard, err)
+		}
 	}
 	h.waitRecords(1)
-	h.eventually("page held", func() bool { return h.held(1) && h.svc.Snapshot().Scanning == nil })
+	h.eventually("a flatbed document with one page", func() bool { return h.held(1) && h.svc.Snapshot().Scanning == nil })
 
-	if err := h.svc.CancelDoubleSided(); err != nil {
+	// "Off" never loses a scan: it is refused while something is held.
+	if err := h.svc.CancelDoubleSided(false); !errors.Is(err, ErrPagesHeld) || !h.held(1) {
+		t.Fatalf("switching off with a page held: err = %v, %+v", err, h.svc.Snapshot())
+	}
+	if err := h.svc.CancelDoubleSided(true); err != nil {
 		t.Fatal(err)
 	}
 	if s := h.svc.Snapshot(); s.DoubleSided != DoubleSidedOff || !strings.Contains(s.DoubleSidedNote.Text, "1 page held were discarded") || len(pdfs(t, h.out)) != 0 {
-		t.Fatalf("after cancel: %+v, output %v", s, pdfs(t, h.out))
+		t.Fatalf("after discarding: %+v, output %v", s, pdfs(t, h.out))
 	}
 
+	// The same switch, a feeder scan first: a stack scanned from both sides.
 	h.start()
-	if err := h.svc.StartDoubleSided(escl.Platen); !errors.Is(err, ErrDoubleSidedActive) {
-		t.Errorf("flatbed document during a feeder run: err = %v", err)
-	}
-	// Saving is for flatbed documents; in a feeder run it does nothing.
 	h.pass(escl.Feeder, stack(1, 100))
-	if err := h.svc.FinishDoubleSided(); err != nil || h.svc.Snapshot().DoubleSided != DoubleSidedBacks {
-		t.Errorf("saving in a feeder run: %v, %+v", err, h.svc.Snapshot())
+	if s := h.svc.Snapshot(); s.DoubleSided != DoubleSidedBacks || s.DoubleSidedHeld != 1 {
+		t.Fatalf("after the fronts: %+v", s)
 	}
+	if err := h.svc.CancelDoubleSided(false); !errors.Is(err, ErrPagesHeld) {
+		t.Errorf("switching off with fronts held: err = %v", err)
+	}
+	// Saving is for flatbed documents; with fronts held it does nothing.
+	if err := h.svc.FinishDoubleSided(); err != nil || h.svc.Snapshot().DoubleSided != DoubleSidedBacks {
+		t.Errorf("saving with fronts held: %v, %+v", err, h.svc.Snapshot())
+	}
+
+	// Nothing held: off is just off. While a scan runs the switch cannot be
+	// turned on, because the role of that scan is fixed.
+	if err := h.svc.CancelDoubleSided(true); err != nil {
+		t.Fatal(err)
+	}
+	h.start()
+	if err := h.svc.CancelDoubleSided(false); err != nil || h.svc.Snapshot().DoubleSided != DoubleSidedOff {
+		t.Errorf("switching off with nothing held: %v", err)
+	}
+	h.fake.QueueJob(slow)
+	if err := h.svc.Scan(escl.Platen, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.svc.StartDoubleSided(); !errors.Is(err, ErrBusy) {
+		t.Errorf("switching on during a scan: err = %v", err)
+	}
+	h.waitRecords(len(h.history()) + 1)
 }
 
 // A failed scan keeps the pages, and so does an output folder that cannot be
@@ -177,7 +204,7 @@ func TestFlatbedDocumentKeepsPages(t *testing.T) {
 	}
 	h, _ := dsHarness(t)
 	t.Cleanup(func() { _ = os.Chmod(h.out, 0o700) })
-	h.startFlatbed()
+	h.start()
 	h.pass(escl.Platen, stack(1, 100))
 
 	if rec := h.pass(escl.Platen, escltest.Step{Code: 410}); rec.Result != metrics.ResultAborted {
@@ -212,7 +239,7 @@ func TestFlatbedDocumentKeepsPages(t *testing.T) {
 // Pages that pdfcpu cannot join are saved as they were scanned.
 func TestFlatbedDocumentThatCannotBeJoined(t *testing.T) {
 	h, _ := dsHarness(t)
-	h.startFlatbed()
+	h.start()
 	h.pass(escl.Platen, stack(1, 100))
 	h.pass(escl.Platen, unreadable())
 	if err := h.svc.FinishDoubleSided(); err != nil {
@@ -229,7 +256,7 @@ func TestFlatbedDocumentThatCannotBeJoined(t *testing.T) {
 func TestFlatbedDocumentTimeoutAndShutdown(t *testing.T) {
 	t.Run("timeout", func(t *testing.T) {
 		h, offset := dsHarness(t)
-		h.startFlatbed()
+		h.start()
 		h.pass(escl.Platen, stack(1, 100))
 		offset.Add(int64(20 * time.Minute))
 		h.pass(escl.Platen, stack(1, 200)) // every page gets the full time again
@@ -250,7 +277,7 @@ func TestFlatbedDocumentTimeoutAndShutdown(t *testing.T) {
 	})
 	t.Run("timeout without a page", func(t *testing.T) {
 		h, offset := dsHarness(t)
-		h.startFlatbed()
+		h.start()
 		offset.Add(int64(31 * time.Minute))
 		h.eventually("off", func() bool { return h.svc.Snapshot().DoubleSided == DoubleSidedOff })
 		if len(pdfs(t, h.out)) != 0 {
@@ -259,7 +286,7 @@ func TestFlatbedDocumentTimeoutAndShutdown(t *testing.T) {
 	})
 	t.Run("shutdown", func(t *testing.T) {
 		h, _ := dsHarness(t)
-		h.startFlatbed()
+		h.start()
 		h.pass(escl.Platen, stack(1, 100))
 		h.pass(escl.Platen, escltest.Step{Body: pdftest.New(pdftest.Options{Pages: 1, Width: 200, XRefStream: true})})
 		h.svc.Shutdown(time.Second)
@@ -289,7 +316,7 @@ func TestDoubleSidedRunKeepsTheColorMode(t *testing.T) {
 
 	t.Run("flatbed", func(t *testing.T) {
 		h, _ := dsHarness(t)
-		h.startFlatbed()
+		h.start()
 		// The page is loaded again while the first scan still runs.
 		slow := stack(1, 50)
 		slow.Delay = 100 * time.Millisecond

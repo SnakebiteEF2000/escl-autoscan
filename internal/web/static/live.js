@@ -6,6 +6,7 @@
   "use strict";
 
   var INTERVAL = 2000;
+  var HIDDEN_INTERVAL = 15000;
   var TIMEOUT = 8000;
   var timer = null;
   var stale = document.getElementById("stale");
@@ -57,11 +58,11 @@
     }
   }
 
+  // A hidden page updates rarely instead of not at all: the updates must
+  // not depend on the browser telling us that the page is visible again.
   function schedule() {
     clearTimeout(timer);
-    if (!document.hidden) {
-      timer = setTimeout(refresh, INTERVAL);
-    }
+    timer = setTimeout(refresh, document.hidden ? HIDDEN_INTERVAL : INTERVAL);
   }
 
   function refresh() {
@@ -96,9 +97,8 @@
   }
 
   document.addEventListener("visibilitychange", function () {
-    if (document.hidden) {
+    if (!document.hidden) {
       clearTimeout(timer);
-    } else {
       refresh();
     }
   });

@@ -7,48 +7,49 @@ import (
 	"time"
 
 	"github.com/SnakebiteEF2000/escl-autoscan/internal/collate"
-	"github.com/SnakebiteEF2000/escl-autoscan/internal/escl"
 	"github.com/SnakebiteEF2000/escl-autoscan/internal/metrics"
 	"github.com/SnakebiteEF2000/escl-autoscan/internal/output"
 )
 
-// Double-sided mode makes one PDF in OUTPUT_DIR out of several scans. There
-// are two ways, and one run at a time:
+// Double-sided mode makes one PDF in OUTPUT_DIR out of several scans. It is
+// switched on without saying how; the first scan decides:
 //
-// From the feeder, which scans one side only: two scans of the same stack,
-// the fronts and then the backs with the stack turned over.
+// A feeder scan makes it a stack scanned twice by a feeder that scans one
+// side only: the fronts, then the backs with the stack turned over.
 //
-//	off --start--> fronts --feeder ok--> backs --feeder ok--> off (one PDF delivered)
+//	off --on--> waiting --feeder ok--> backs --feeder ok--> off (one PDF delivered)
 //
-// From the flatbed: any number of scans, page after page, both sides of a
-// sheet in reading order, until the user saves the document.
+// A flatbed scan makes it a document scanned page after page, both sides of
+// a sheet in reading order, until the user saves it.
 //
-//	off --start--> flatbed --flatbed ok--> flatbed ... --save--> off (one PDF delivered)
+//	off --on--> waiting --flatbed ok--> flatbed --flatbed ok--> flatbed ... --save--> off
 //
 // What is scanned so far is held in memory. A failed scan keeps the state,
-// so it can be repeated. Cancelling discards what is held; a timeout or a
-// shutdown saves it (fronts as a normal single-sided scan, flatbed pages as
-// one document).
+// so it can be repeated. Discarding is its own action; switching the mode
+// off is refused while something is held. A timeout or a shutdown saves what
+// is held (fronts as a normal single-sided scan, flatbed pages as one
+// document).
 //
 // A scan that passed validation is never thrown away because of this mode:
 // it is held, collated or delivered as a normal scan.
 //
 // The role of a scan (Current.Pass) is fixed when the scan starts, and while
 // such a pass runs neither the user nor the timeout changes the state. So
-// the scan goroutine finds the state it started with. Scans from the other
-// source never take part and are delivered as usual.
+// the scan goroutine finds the state it started with. Once the first scan
+// has decided, scans from the other source do not take part and are
+// delivered as usual.
 
 // Double-sided states, also the value of escl_autoscan_double_sided_state.
 const (
 	DoubleSidedOff     = 0
-	DoubleSidedFronts  = 1 // feeder: waiting for the fronts
+	DoubleSidedWaiting = 1 // on, nothing scanned yet: the first scan decides
 	DoubleSidedBacks   = 2 // feeder: fronts held, waiting for the backs
 	DoubleSidedFlatbed = 3 // flatbed: collecting pages
 )
 
-// ErrDoubleSidedActive is returned when a run from the other source is in
-// progress.
-var ErrDoubleSidedActive = errors.New("another double-sided document is in progress")
+// ErrPagesHeld is returned when double-sided mode is to be switched off
+// while it holds scans. They have to be saved or discarded first.
+var ErrPagesHeld = errors.New("scans are held for a double-sided document")
 
 // Note kinds.
 const (
@@ -75,33 +76,27 @@ type heldPages struct {
 	color string
 }
 
-// StartDoubleSided starts a run from the feeder (fronts, then backs) or from
-// the flatbed (page by page). It returns ErrBusy while a scan from that
-// source runs, because the role of that scan is already fixed, and
-// ErrDoubleSidedActive while a run from the other source is in progress.
-func (s *Service) StartDoubleSided(source escl.InputSource) error {
-	state := DoubleSidedFronts
-	if source == escl.Platen {
-		state = DoubleSidedFlatbed
-	}
+// StartDoubleSided switches double-sided mode on. It returns ErrBusy while a
+// scan runs, because the role of that scan is already fixed.
+func (s *Service) StartDoubleSided() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch {
-	case s.ds == state || (s.ds == DoubleSidedBacks && state == DoubleSidedFronts):
-		return nil // already running
 	case s.ds != DoubleSidedOff:
-		return ErrDoubleSidedActive
-	case s.scanning != nil && s.scanning.Source == sourceLabel(source):
+		return nil
+	case s.scanning != nil:
 		return ErrBusy
 	}
-	s.setDoubleSided(state, Note{})
-	s.log.Info("double-sided mode started", "source", sourceLabel(source), "timeout", s.cfg.DoubleSidedTimeout)
+	s.setDoubleSided(DoubleSidedWaiting, Note{})
+	s.log.Info("double-sided mode started", "timeout", s.cfg.DoubleSidedTimeout)
 	return nil
 }
 
-// CancelDoubleSided ends the run and discards what is held. It returns
-// ErrBusy while a scan that takes part runs.
-func (s *Service) CancelDoubleSided() error {
+// CancelDoubleSided switches double-sided mode off. With discard it throws
+// away what is held; without, it returns ErrPagesHeld if anything is held,
+// so that "off" never loses a scan. It returns ErrBusy while a scan that
+// takes part runs.
+func (s *Service) CancelDoubleSided(discard bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch {
@@ -109,14 +104,16 @@ func (s *Service) CancelDoubleSided() error {
 		return nil
 	case s.passRunning():
 		return ErrBusy
+	case s.dsHeld != nil && !discard:
+		return ErrPagesHeld
 	}
-	note := Note{NoteInfo, "Double-sided cancelled."}
+	note := Note{NoteInfo, "Double-sided switched off."}
 	if s.dsHeld != nil {
 		what := plural(s.dsHeld.pages, "front")
 		if s.ds == DoubleSidedFlatbed {
 			what = plural(s.dsHeld.pages, "page")
 		}
-		note.Text = "Double-sided cancelled. The " + what + " held were discarded."
+		note.Text = "Double-sided switched off. The " + what + " held were discarded."
 	}
 	s.log.Info("double-sided mode cancelled", "state", s.ds)
 	s.endDoubleSided(metrics.DoubleSidedCancelled, note)
@@ -354,32 +351,34 @@ func (s *Service) write(w *output.Writer, docs [][]byte, at time.Time, suffix st
 // passFailed tells the user how to go on after a failed pass. The run stays
 // on, with the full timeout again.
 func (s *Service) passFailed(pass int, rec *Record) {
-	var text string
-	switch pass {
-	case DoubleSidedOff:
+	if pass == DoubleSidedOff {
 		return
-	case DoubleSidedFronts:
-		text = fmt.Sprintf("The scan of the fronts failed (%s). Put the stack back into the feeder to scan the fronts again.", rec.Result)
-	case DoubleSidedBacks:
-		text = fmt.Sprintf("The scan of the backs failed (%s). The fronts are still held: put the turned-over stack back into the feeder to scan the backs again.", rec.Result)
-	case DoubleSidedFlatbed:
-		text = fmt.Sprintf("The scan failed (%s). Scan this page again.", rec.Result)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ds != pass {
 		return
 	}
-	if pass == DoubleSidedFlatbed && s.dsHeld != nil {
-		text += " The " + plural(s.dsHeld.pages, "page") + " scanned before are still held."
+	var text string
+	switch {
+	case pass == DoubleSidedBacks:
+		text = fmt.Sprintf("The scan of the backs failed (%s). The fronts are still held: put the turned-over stack back into the feeder to scan the backs again.", rec.Result)
+	case rec.Source == "feeder":
+		text = fmt.Sprintf("The scan of the fronts failed (%s). Put the stack back into the feeder to scan the fronts again.", rec.Result)
+	default:
+		text = fmt.Sprintf("The scan failed (%s). Scan this page again.", rec.Result)
+		if s.dsHeld != nil {
+			text += " The " + plural(s.dsHeld.pages, "page") + " scanned before are still held."
+		}
 	}
 	s.setDoubleSided(pass, Note{NoteWarn, text})
 }
 
-// holdPage adds a successful flatbed scan to the document.
+// holdPage adds a successful flatbed scan to the document. The first one
+// makes the run a flatbed document.
 func (s *Service) holdPage(rec *Record, docs [][]byte) {
 	s.mu.Lock()
-	if s.ds != DoubleSidedFlatbed { // only when a shutdown has ended the run
+	if s.ds != DoubleSidedFlatbed && s.ds != DoubleSidedWaiting { // only when a shutdown has ended the run
 		s.mu.Unlock()
 		s.deliver(rec, docs)
 		return
@@ -399,7 +398,7 @@ func (s *Service) holdPage(rec *Record, docs [][]byte) {
 }
 
 // holdFronts keeps a successful fronts pass in memory until the backs
-// arrive. If pdfcpu cannot read the scan, collating would fail later; then
+// arrive; it makes the run a feeder run. If pdfcpu cannot read the scan, collating would fail later; then
 // the scan is delivered as a normal one right away and the mode ends.
 func (s *Service) holdFronts(rec *Record, docs [][]byte) {
 	pages, err := collate.Pages(docs)

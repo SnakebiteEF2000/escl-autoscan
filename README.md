@@ -163,7 +163,7 @@ All metrics are on `METRICS_ADDR` with the prefix `escl_autoscan_`:
 | `pages_total` | Pages of successful scans. Each pass of a double-sided scan counts its own pages. |
 | `last_success_timestamp_seconds` | Time of the last successful scan. Fronts held for a double-sided scan count. |
 | `scan_duration_seconds` | Histogram of job durations. |
-| `double_sided_state` | 0 off, 1 waiting for the fronts, 2 holding the fronts and waiting for the backs, 3 collecting the pages of a flatbed document. |
+| `double_sided_state` | 0 off, 1 on and waiting for the first scan, 2 holding the fronts and waiting for the backs, 3 collecting the pages of a flatbed document. |
 | `double_sided_total{result}` | Finished double-sided runs, from the feeder or the flatbed: `delivered` (one PDF), `timeout` (what was held was saved), `cancelled` (by the user; what was held was discarded) or `failed` (the PDFs could not be combined and were delivered as they are). |
 | `backlog_files`, `backlog_oldest_age_seconds` | Only with `BACKLOG_DIR`. Counts consumable files (`.pdf .png .jpg .jpeg .tif .tiff .webp .txt .eml`) below the consume root, every 60s. `.part` files and dotfiles are ignored. A growing age means Paperless is not consuming. |
 
@@ -175,14 +175,16 @@ printer is normal.
 
 Double-sided mode delivers **one PDF** made of several scans, with the pages
 in order. Paperless sees a normal document; it needs no setting for this.
-There are two ways, and one document at a time.
+Switch **Double-sided** on in the scan console; the first scan after that
+decides what the document is. One document at a time.
 
 ### From the feeder
 
 The WF-2960 feeder scans one side only, so a stack is scanned twice, fronts
 and then backs.
 
-1. Press **From the feeder**. The page shows the two steps.
+1. Switch **Double-sided** on. The page shows the document as a row of
+   sheets: scanned ones solid, the ones still to come dashed.
 2. Put the stack into the feeder. The next successful feeder scan, automatic
    or via "Scan feeder", is the fronts. They are held in memory; nothing is
    written yet.
@@ -202,17 +204,20 @@ in reading order. Nothing has to be re-sorted; the pages are joined in the
 order they were scanned. This also works for a book or for single-sided
 pages that should become one document.
 
-1. Press **From the flatbed**.
-2. Put the first page on the glass and press **Scan first page** (the gray or
-   color choice of the Scan card applies, and stays selected for the
-   following pages). The page is held in memory.
+1. Switch **Double-sided** on.
+2. Put the first page on the glass and press **Scan flatbed** (the gray or
+   color choice applies, and stays selected for the following pages). The
+   page is held in memory.
 3. Turn the sheet over, or put the next one on the glass, and press **Scan
-   next page**. Repeat for every page; the page shows how many are held.
+   flatbed** again. Repeat for every page; the page shows the sheets held.
 4. Press **Save document**. The pages go to `OUTPUT_DIR` as one PDF. A
    document of a single page is delivered exactly as scanned.
 
-Feeder scans do not take part: paper put into the feeder meanwhile is
-scanned and delivered as usual.
+Once the first flatbed page is held, feeder scans do not take part: paper
+put into the feeder meanwhile is scanned and delivered as usual.
+
+The first scan decides, whichever it is. Between switching on and that scan,
+a stack that autoscan picks up from the feeder becomes the fronts.
 
 ### When something goes wrong
 
@@ -228,8 +233,10 @@ scanned and delivered as usual.
   valid (it may also be a letter somebody scanned in between), so it is
   delivered as a normal single-sided scan and the page names the file;
   delete it in Paperless if it was meant to be the backs.
-- **Cancel** ends the mode and discards what is held (the fronts, or the
-  flatbed pages so far); the button says so.
+- **Discard** ends the mode and throws away what is held (the fronts, or the
+  flatbed pages so far); the button says so. Switching back to
+  **Single-sided** is only possible while nothing is held, so it never
+  loses a scan.
 - **Timeout** (`DOUBLE_SIDED_TIMEOUT`, 30 minutes per step or page) and
   **shutdown** never discard: held fronts are saved as a normal single-sided
   scan, held flatbed pages as one document. You may have walked away
@@ -246,19 +253,19 @@ scanned and delivered as usual.
 
 The rule behind all of these: a scan that passed validation is never thrown
 away because of double-sided mode. It is held, collated, or delivered as a
-normal scan. Only cancelling discards, and only what is held.
+normal scan. Only the Discard button discards, and only what is held.
 
 Details:
 
 - One document, one look: the backs are scanned in the color mode of the
   fronts, also when autoscan starts them, and the page preselects the mode
   of the scans held so far. Choosing another mode for a scan still works.
-- The role of a scan is fixed when it starts. Starting a run is refused
-  while a scan from its source runs; saving and cancelling are refused, and
-  the timeout waits, while a scan that takes part runs.
-- Scans from the other source never take part: flatbed scans during a
-  feeder run and feeder scans during a flatbed document go to the normal
-  output and do not change the mode.
+- The role of a scan is fixed when it starts. Switching double-sided on is
+  refused while a scan runs; saving and discarding are refused, and the
+  timeout waits, while a scan that takes part runs.
+- After the first scan, scans from the other source do not take part:
+  flatbed scans during a feeder run and feeder scans during a flatbed
+  document go to the normal output and do not change the mode.
 - A pass may consist of several documents (some devices return one per
   page); they count as one sequence. The WF-2960 returns one PDF per job.
 - Pages are moved as they are: images are not re-encoded, and their bytes
@@ -485,7 +492,7 @@ PAPERLESS_CONSUMER_POLLING_INTERVAL=10    # inotify does not work on NFS; poll e
   capabilities.
 - **Content-Security-Policy.** The UI allows scripts, styles, images and
   requests from its own origin only, and nothing inline. Its one script
-  (`static/live.js`, about 100 lines, no library) fetches the page again every
+  (`static/live.js`, about 110 lines, no library) fetches the page again every
   two seconds and replaces the parts that changed. Without JavaScript the
   page works the same and reloads itself instead.
 

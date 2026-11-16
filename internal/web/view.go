@@ -41,7 +41,7 @@ func newHero(s autoscan.Snapshot, now time.Time) hero {
 	case s.Settling:
 		what := "Scanning"
 		switch s.DoubleSided {
-		case autoscan.DoubleSidedFronts:
+		case autoscan.DoubleSidedWaiting:
 			what = "Scanning the fronts"
 		case autoscan.DoubleSidedBacks:
 			what = "Scanning the backs"
@@ -51,37 +51,99 @@ func newHero(s autoscan.Snapshot, now time.Time) hero {
 		return hero{"bad", "Scanner stopped", "It reports “" + s.State + "”. Check the display of the scanner."}
 	case s.State != escl.StateIdle:
 		return hero{"warn", "Scanner is busy", "It reports “" + s.State + "”: someone is copying, or using its panel."}
-	case s.DoubleSided == autoscan.DoubleSidedFlatbed:
-		if s.DoubleSidedHeld == 0 {
-			return hero{"ok", "Ready for the first page", "Put it on the glass and press Scan first page."}
+	}
+
+	// The scanner is idle. A double-sided document in the making comes
+	// first: the user is in the middle of it.
+	auto := s.AutoscanEnabled && !s.Paused && s.Armed // a stack put in now is scanned by itself
+	loaded := s.AdfState == escl.AdfLoaded
+	switch s.DoubleSided {
+	case autoscan.DoubleSidedWaiting:
+		feeder := "Put the stack into the feeder and press Scan feeder"
+		switch {
+		case auto:
+			feeder = "Put the stack into the feeder"
+		case loaded:
+			feeder = "Press Scan feeder for the stack in the feeder"
 		}
-		return hero{"ok", "Ready for the next page", "Put it on the glass and press Scan next page, or save the document: " +
+		return hero{"ok", "Ready for a double-sided document", feeder + ", or put the first page on the glass and press Scan flatbed."}
+	case autoscan.DoubleSidedBacks:
+		switch {
+		case auto:
+			return hero{"ok", "Ready for the backs", "Turn the stack over and put it back into the feeder. Scanning starts after " + settle + "."}
+		case loaded:
+			return hero{"ok", "Ready for the backs", "Press Scan feeder to scan the stack in the feeder as the backs."}
+		}
+		return hero{"ok", "Ready for the backs", "Turn the stack over, put it back into the feeder and press Scan feeder."}
+	case autoscan.DoubleSidedFlatbed:
+		return hero{"ok", "Ready for the next page", "Put it on the glass and press Scan flatbed, or save the document: " +
 			pageCount(s.DoubleSidedHeld) + " so far."}
+	}
+
+	switch {
 	case !s.AutoscanEnabled:
 		return hero{"idle", "Ready", "Autoscan is switched off. Use the buttons below to scan."}
 	case s.Paused:
 		return hero{"warn", "Autoscan is paused", "Paper in the feeder is not scanned by itself. Use the buttons below, or resume autoscan."}
-	case s.AdfState == escl.AdfLoaded && !s.Armed:
+	case loaded && !s.Armed:
 		return hero{"warn", "Paper is waiting in the feeder",
 			"It is not scanned by itself: it was already there, or its scan was skipped or failed. Press Scan feeder, or take the stack out and put it back in."}
 	case !s.Armed:
 		return hero{"idle", "Waiting for an empty feeder", "Autoscan starts again once the feeder has been empty."}
-	case s.DoubleSided == autoscan.DoubleSidedFronts:
-		return hero{"ok", "Ready for the fronts", "Put the stack into the feeder. Scanning starts after " + settle + "."}
-	case s.DoubleSided == autoscan.DoubleSidedBacks:
-		return hero{"ok", "Ready for the backs", "Turn the stack over and put it back into the feeder. Scanning starts after " + settle + "."}
 	}
 	return hero{"ok", "Ready for paper", "Put a stack into the feeder. Scanning starts after " + settle + "."}
 }
 
 func scanSubject(c *autoscan.Current) string {
 	switch {
-	case c.Pass == autoscan.DoubleSidedFronts:
+	case c.Pass == autoscan.DoubleSidedWaiting && c.Source == "feeder":
 		return "fronts"
 	case c.Pass == autoscan.DoubleSidedBacks:
 		return "backs"
 	}
 	return sourceName(c.Source)
+}
+
+// document pictures a double-sided document in the making as a row of
+// sheets in the order of the finished PDF.
+type document struct {
+	Sheets []sheet
+	// Before and After count sheets left out of a long document.
+	Before, After int
+}
+
+// sheet is one page of the document in the making.
+type sheet struct {
+	N    int  // page number in the finished document
+	Held bool // scanned and held; otherwise still to come
+}
+
+// maxSheets is how many sheets the page draws; a feeder takes 50.
+const maxSheets = 16
+
+func newDocument(s autoscan.Snapshot) document {
+	var d document
+	switch s.DoubleSided {
+	case autoscan.DoubleSidedWaiting:
+		d.Sheets = []sheet{{N: 1}}
+	case autoscan.DoubleSidedBacks:
+		// The fronts are the odd pages; the backs will fill the gaps. A
+		// long stack shows its beginning: the pattern is what matters.
+		total := 2 * s.DoubleSidedHeld
+		for n := 1; n <= min(total, maxSheets); n++ {
+			d.Sheets = append(d.Sheets, sheet{N: n, Held: n%2 == 1})
+		}
+		d.After = total - len(d.Sheets)
+	case autoscan.DoubleSidedFlatbed:
+		// The pages so far and the next one. A long document shows its end:
+		// where the user is.
+		total := s.DoubleSidedHeld + 1
+		d.Before = max(total-maxSheets, 0)
+		for n := d.Before + 1; n <= total; n++ {
+			d.Sheets = append(d.Sheets, sheet{N: n, Held: n < total})
+		}
+	}
+	return d
 }
 
 // sourceName is the word the UI uses for a scan source.
@@ -163,9 +225,11 @@ func minutes(d time.Duration) string {
 	return fmt.Sprintf("%d min", int(math.Ceil(max(d, 0).Minutes())))
 }
 
-func pageCount(n int) string {
+func pageCount(n int) string { return plural(n, "page") }
+
+func plural(n int, noun string) string {
 	if n == 1 {
-		return "1 page"
+		return "1 " + noun
 	}
-	return fmt.Sprintf("%d pages", n)
+	return fmt.Sprintf("%d %ss", n, noun)
 }

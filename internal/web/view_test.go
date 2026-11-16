@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -41,19 +42,29 @@ func TestHero(t *testing.T) {
 		{"paused", ready(func(s *autoscan.Snapshot) { s.Paused = true }), "warn", "Autoscan is paused", "resume"},
 		{"loaded at startup", ready(func(s *autoscan.Snapshot) { s.AdfState, s.Armed = "ScannerAdfLoaded", false }), "warn", "Paper is waiting in the feeder", "Press Scan feeder"},
 		{"between sheets", ready(func(s *autoscan.Snapshot) { s.AdfState, s.Armed = "ScannerAdfProcessing", false }), "idle", "Waiting for an empty feeder", ""},
-		{"fronts", ready(func(s *autoscan.Snapshot) { s.DoubleSided = autoscan.DoubleSidedFronts }), "ok", "Ready for the fronts", "Put the stack"},
-		{"backs", ready(func(s *autoscan.Snapshot) { s.DoubleSided = autoscan.DoubleSidedBacks }), "ok", "Ready for the backs", "Turn the stack over"},
-		{"flatbed, first page", ready(func(s *autoscan.Snapshot) { s.DoubleSided = autoscan.DoubleSidedFlatbed }), "ok", "Ready for the first page", "Scan first page"},
-		{"flatbed, next page", ready(func(s *autoscan.Snapshot) {
-			s.DoubleSided, s.DoubleSidedHeld = autoscan.DoubleSidedFlatbed, 2
-		}), "ok", "Ready for the next page", "2 pages so far"},
-		// A flatbed document does not need autoscan, but paper in the feeder still comes first.
-		{"flatbed, autoscan paused", ready(func(s *autoscan.Snapshot) {
-			s.DoubleSided, s.DoubleSidedHeld, s.Paused = autoscan.DoubleSidedFlatbed, 1, true
-		}), "ok", "Ready for the next page", "1 page so far"},
-		{"flatbed, paper detected", ready(func(s *autoscan.Snapshot) {
-			s.DoubleSided, s.AdfState, s.Settling = autoscan.DoubleSidedFlatbed, "ScannerAdfLoaded", true
+		// A double-sided document in the making comes before what autoscan is doing.
+		{"double-sided on", ready(func(s *autoscan.Snapshot) { s.DoubleSided = autoscan.DoubleSidedWaiting }), "ok",
+			"Ready for a double-sided document", "Put the stack into the feeder, or put the first page on the glass and press Scan flatbed."},
+		{"double-sided on, autoscan paused", ready(func(s *autoscan.Snapshot) { s.DoubleSided, s.Paused = autoscan.DoubleSidedWaiting, true }), "ok",
+			"Ready for a double-sided document", "Put the stack into the feeder and press Scan feeder, or"},
+		{"double-sided on, stack already there", ready(func(s *autoscan.Snapshot) {
+			s.DoubleSided, s.AdfState, s.Armed = autoscan.DoubleSidedWaiting, "ScannerAdfLoaded", false
+		}), "ok", "Ready for a double-sided document", "Press Scan feeder for the stack in the feeder, or"},
+		{"backs", ready(func(s *autoscan.Snapshot) { s.DoubleSided = autoscan.DoubleSidedBacks }), "ok", "Ready for the backs", "Turn the stack over and put it back into the feeder. Scanning starts"},
+		{"backs, autoscan paused", ready(func(s *autoscan.Snapshot) { s.DoubleSided, s.Paused = autoscan.DoubleSidedBacks, true }), "ok",
+			"Ready for the backs", "put it back into the feeder and press Scan feeder"},
+		{"backs, stack waiting after a failed pass", ready(func(s *autoscan.Snapshot) {
+			s.DoubleSided, s.AdfState, s.Armed = autoscan.DoubleSidedBacks, "ScannerAdfLoaded", false
+		}), "ok", "Ready for the backs", "Press Scan feeder to scan the stack in the feeder as the backs."},
+		{"flatbed document", ready(func(s *autoscan.Snapshot) {
+			s.DoubleSided, s.DoubleSidedHeld, s.Paused = autoscan.DoubleSidedFlatbed, 2, true
+		}), "ok", "Ready for the next page", "press Scan flatbed, or save the document: 2 pages so far"},
+		{"flatbed document, paper detected in the feeder", ready(func(s *autoscan.Snapshot) {
+			s.DoubleSided, s.DoubleSidedHeld, s.AdfState, s.Settling = autoscan.DoubleSidedFlatbed, 1, "ScannerAdfLoaded", true
 		}), "busy", "Paper detected", "Scanning starts within 10 s"},
+		{"fronts detected", ready(func(s *autoscan.Snapshot) {
+			s.DoubleSided, s.AdfState, s.Settling = autoscan.DoubleSidedWaiting, "ScannerAdfLoaded", true
+		}), "busy", "Paper detected", "Scanning the fronts starts"},
 		// A running scan comes first, whatever the scanner reports meanwhile.
 		{"scanning", ready(func(s *autoscan.Snapshot) {
 			s.State, s.AdfState, s.Armed = "Processing", "ScannerAdfProcessing", false
@@ -62,6 +73,14 @@ func TestHero(t *testing.T) {
 		{"scanning the flatbed", ready(func(s *autoscan.Snapshot) {
 			s.Scanning = &autoscan.Current{Source: "platen", Started: now.Add(-3 * time.Minute)}
 		}), "busy", "Scanning the flatbed", "Running for 3 min"},
+		{"scanning the fronts", ready(func(s *autoscan.Snapshot) {
+			s.DoubleSided = autoscan.DoubleSidedWaiting
+			s.Scanning = &autoscan.Current{Source: "feeder", Pass: autoscan.DoubleSidedWaiting, Started: now}
+		}), "busy", "Scanning the fronts", ""},
+		{"scanning the first flatbed page", ready(func(s *autoscan.Snapshot) {
+			s.DoubleSided = autoscan.DoubleSidedWaiting
+			s.Scanning = &autoscan.Current{Source: "platen", Pass: autoscan.DoubleSidedWaiting, Started: now}
+		}), "busy", "Scanning the flatbed", ""},
 		{"scanning the backs", ready(func(s *autoscan.Snapshot) {
 			s.DoubleSided = autoscan.DoubleSidedBacks
 			s.Scanning = &autoscan.Current{Source: "feeder", Pass: autoscan.DoubleSidedBacks, Started: now}
@@ -111,6 +130,44 @@ func TestLabels(t *testing.T) {
 	} {
 		if got := span(d); got != want {
 			t.Errorf("span(%v) = %q, want %q", d, got, want)
+		}
+	}
+}
+
+// The document in the making is drawn as sheets. A full feeder (50 sheets)
+// or a long flatbed document must not flood the page.
+func TestDocumentSheets(t *testing.T) {
+	show := func(d document) string {
+		var b strings.Builder
+		if d.Before > 0 {
+			fmt.Fprintf(&b, "(%d before) ", d.Before)
+		}
+		for _, s := range d.Sheets {
+			if s.Held {
+				fmt.Fprintf(&b, "[%d] ", s.N)
+			} else {
+				fmt.Fprintf(&b, "%d ", s.N)
+			}
+		}
+		if d.After > 0 {
+			fmt.Fprintf(&b, "(%d after)", d.After)
+		}
+		return strings.TrimSpace(b.String())
+	}
+	for _, tc := range []struct {
+		name        string
+		state, held int
+		want        string
+	}{
+		{"off", autoscan.DoubleSidedOff, 0, ""},
+		{"on", autoscan.DoubleSidedWaiting, 0, "1"},
+		{"fronts of 3 sheets", autoscan.DoubleSidedBacks, 3, "[1] 2 [3] 4 [5] 6"},
+		{"fronts of 50 sheets", autoscan.DoubleSidedBacks, 50, "[1] 2 [3] 4 [5] 6 [7] 8 [9] 10 [11] 12 [13] 14 [15] 16 (84 after)"},
+		{"flatbed, 2 pages", autoscan.DoubleSidedFlatbed, 2, "[1] [2] 3"},
+		{"flatbed, 40 pages", autoscan.DoubleSidedFlatbed, 40, "(25 before) [26] [27] [28] [29] [30] [31] [32] [33] [34] [35] [36] [37] [38] [39] [40] 41"},
+	} {
+		if got := show(newDocument(autoscan.Snapshot{DoubleSided: tc.state, DoubleSidedHeld: tc.held})); got != tc.want {
+			t.Errorf("%s: %s, want %s", tc.name, got, tc.want)
 		}
 	}
 }

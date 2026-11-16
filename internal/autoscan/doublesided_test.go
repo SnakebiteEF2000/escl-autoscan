@@ -60,7 +60,7 @@ func (h *harness) pass(source escl.InputSource, steps ...escltest.Step) Record {
 
 func (h *harness) start() {
 	h.t.Helper()
-	if err := h.svc.StartDoubleSided(escl.Feeder); err != nil {
+	if err := h.svc.StartDoubleSided(); err != nil {
 		h.t.Fatal(err)
 	}
 }
@@ -124,7 +124,7 @@ func (h *harness) stays(what string, cond func() bool) {
 func TestDoubleSidedPair(t *testing.T) {
 	h, _ := dsHarness(t)
 	h.start()
-	if s := h.svc.Snapshot(); s.DoubleSided != DoubleSidedFronts || h.metric("escl_autoscan_double_sided_state") != 1 {
+	if s := h.svc.Snapshot(); s.DoubleSided != DoubleSidedWaiting || h.metric("escl_autoscan_double_sided_state") != 1 {
 		t.Fatalf("after start: %+v", s)
 	}
 
@@ -193,11 +193,11 @@ func TestDoubleSidedFailedPassCanBeRepeated(t *testing.T) {
 	if rec := h.pass(escl.Feeder, jam()...); rec.Result != metrics.ResultAborted {
 		t.Fatalf("jammed fronts: %+v", rec)
 	}
-	if s := h.svc.Snapshot(); s.DoubleSided != DoubleSidedFronts || s.DoubleSidedNote.Kind != NoteWarn || !strings.Contains(s.DoubleSidedNote.Text, "fronts again") {
+	if s := h.svc.Snapshot(); s.DoubleSided != DoubleSidedWaiting || s.DoubleSidedNote.Kind != NoteWarn || !strings.Contains(s.DoubleSidedNote.Text, "fronts again") {
 		t.Fatalf("after jammed fronts: %+v", s)
 	}
 	offset.Add(int64(20 * time.Minute))
-	h.stays("waiting for the fronts 20 minutes after the jam", state(DoubleSidedFronts))
+	h.stays("waiting for the fronts 20 minutes after the jam", state(DoubleSidedWaiting))
 	h.pass(escl.Feeder, stack(2, 100))
 	offset.Add(int64(20 * time.Minute))
 	h.stays("waiting for the backs 20 minutes after the fronts", state(DoubleSidedBacks))
@@ -293,7 +293,7 @@ func TestDoubleSidedCancelDiscardsFronts(t *testing.T) {
 	h, _ := dsHarness(t)
 	h.start()
 	h.pass(escl.Feeder, stack(3, 100))
-	if err := h.svc.CancelDoubleSided(); err != nil {
+	if err := h.svc.CancelDoubleSided(true); err != nil {
 		t.Fatal(err)
 	}
 	s := h.svc.Snapshot()
@@ -308,8 +308,8 @@ func TestDoubleSidedCancelDiscardsFronts(t *testing.T) {
 	// Starting twice and cancelling when off change nothing.
 	h.start()
 	h.start()
-	_ = h.svc.CancelDoubleSided()
-	_ = h.svc.CancelDoubleSided()
+	_ = h.svc.CancelDoubleSided(true)
+	_ = h.svc.CancelDoubleSided(true)
 	if h.dsTotal(metrics.DoubleSidedCancelled) != 2 {
 		t.Errorf("cancelled = %v, want 2", h.dsTotal(metrics.DoubleSidedCancelled))
 	}
@@ -328,7 +328,7 @@ func TestDoubleSidedStateIsFrozenWhileAPassRuns(t *testing.T) {
 	if err := h.svc.Scan(escl.Feeder, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.svc.StartDoubleSided(escl.Feeder); !errors.Is(err, ErrBusy) {
+	if err := h.svc.StartDoubleSided(); !errors.Is(err, ErrBusy) {
 		t.Fatalf("start during a feeder scan: err = %v, want ErrBusy", err)
 	}
 	h.waitRecords(1)
@@ -343,7 +343,7 @@ func TestDoubleSidedStateIsFrozenWhileAPassRuns(t *testing.T) {
 	if cur := h.svc.Snapshot().Scanning; cur == nil || cur.Pass != DoubleSidedBacks {
 		t.Fatalf("running pass = %+v, want the backs", cur)
 	}
-	if err := h.svc.CancelDoubleSided(); !errors.Is(err, ErrBusy) {
+	if err := h.svc.CancelDoubleSided(true); !errors.Is(err, ErrBusy) {
 		t.Fatalf("cancel during the backs: err = %v, want ErrBusy", err)
 	}
 	offset.Add(int64(31 * time.Minute)) // the deadline passes while the backs are scanned

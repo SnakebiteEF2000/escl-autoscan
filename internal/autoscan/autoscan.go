@@ -141,10 +141,11 @@ type Current struct {
 	Trigger string // "auto" or "manual"
 	Color   string
 	Started time.Time
-	// Pass is the role of the scan in a double-sided run: DoubleSidedFronts
-	// or DoubleSidedBacks for a feeder scan, DoubleSidedFlatbed for a
-	// flatbed scan, DoubleSidedOff for a normal scan. It is fixed when the
-	// scan starts.
+	// Pass is the role of the scan in a double-sided run, the state the run
+	// was in when the scan started: DoubleSidedWaiting for the first scan
+	// (the fronts from the feeder, or the first flatbed page),
+	// DoubleSidedBacks, DoubleSidedFlatbed, or DoubleSidedOff for a normal
+	// scan.
 	Pass int
 }
 
@@ -183,7 +184,7 @@ type Snapshot struct {
 	ColorMode       string   // preselected: SCAN_COLOR_MODE, or the mode of the scans held for a double-sided document
 	History         []Record // newest first
 
-	DoubleSided         int       // DoubleSidedOff, ...Fronts, ...Backs, ...Flatbed
+	DoubleSided         int       // DoubleSidedOff, ...Waiting, ...Backs, ...Flatbed
 	DoubleSidedDeadline time.Time // when the current step expires
 	DoubleSidedHeld     int       // pages held: the fronts, or the flatbed pages so far
 	DoubleSidedNote     Note
@@ -442,8 +443,11 @@ func (s *Service) start(source escl.InputSource, colorMode, trigger string) erro
 		// Whatever happens, this stack is done; wait for an empty feeder.
 		s.setArmed(false, "scan started")
 	}
-	if (source == escl.Platen) == (s.ds == DoubleSidedFlatbed) {
-		cur.Pass = s.ds // the scan takes part in the run from its source
+	switch {
+	case s.ds == DoubleSidedWaiting, // the first scan decides what the run is
+		s.ds == DoubleSidedBacks && source == escl.Feeder,
+		s.ds == DoubleSidedFlatbed && source == escl.Platen:
+		cur.Pass = s.ds
 	}
 	// The default color mode is SCAN_COLOR_MODE; within a double-sided run
 	// it is the mode of the scans before, so that the backs match the fronts.

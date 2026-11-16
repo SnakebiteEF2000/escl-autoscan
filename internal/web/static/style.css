@@ -54,43 +54,57 @@ button { font: inherit; font-weight: 600; min-height: 2.75rem; padding: .6rem 1.
   border: 1px solid transparent; border-radius: .5rem; background: var(--accent); color: var(--accent-fg); }
 button:disabled { opacity: .45; cursor: not-allowed; }
 button.secondary { background: transparent; color: var(--fg); border-color: var(--edge); }
-button.link { background: none; color: var(--link); font-weight: 400; min-height: 0; padding: 0; }
-.buttons { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
-.stack { display: grid; gap: .5rem; }
-.row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem;
-  margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--line); }
-.row p { margin: 0; flex: 1 1 14rem; }
+/* An action that does not need a button's weight: pause, discard, log out. */
+button.quiet { background: none; border-color: transparent; color: var(--fg); font-weight: 400;
+  text-decoration: underline; text-underline-offset: .15em; padding-left: 0; padding-right: 0; }
 .user { display: flex; gap: .75rem; align-items: center; color: var(--muted); font-size: .875rem; }
 .user span { overflow-wrap: anywhere; }
+.user button { min-height: 0; padding: 0; }
 
-/* Gray or color: two radio buttons that look like one switch. */
-.segmented { display: grid; grid-template-columns: 1fr 1fr; margin-bottom: .75rem;
-  border: 1px solid var(--edge); border-radius: .5rem; overflow: hidden; }
-.segmented label { position: relative; }
-.segmented input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
-.segmented span { display: grid; place-items: center; min-height: 2.75rem; padding: .4rem 1rem; }
-.segmented input:checked + span { background: var(--fg); color: var(--card); font-weight: 600; }
-.segmented input:focus-visible + span { outline: 2px solid var(--link); outline-offset: -4px; }
+/* The console: everything that starts or shapes a scan, in one place. A
+   control keeps its place in every mode; the mode changes what a scan adds
+   to. */
+.console { display: grid; gap: .9rem; background: var(--card); border: 1px solid var(--line); border-radius: .75rem;
+  padding: 1.1rem 1.25rem; }
+.console > div:empty { display: none; }
+.console p { margin: 0; }
+.options { display: grid; gap: .5rem; }
+.go { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+.finish { display: flex; flex-wrap: wrap; align-items: center; gap: 0 1.25rem; }
+.autoscan { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 1rem;
+  padding-top: .5rem; border-top: 1px solid var(--line); }
+.autoscan p { flex: 1 1 14rem; padding-top: .4rem; }
+
+/* Two choices that look alike: gray or color (radio buttons, sent with the
+   scan) and single- or double-sided (buttons, a state of the service). */
+.switch { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--edge); border-radius: .5rem; overflow: hidden; }
+.switch label { position: relative; }
+.switch input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.switch span, .switch button { display: grid; place-items: center; min-height: 2.75rem; padding: .4rem .75rem;
+  border: 0; border-radius: 0; background: transparent; color: var(--fg); font-weight: 400; }
+.switch input:checked + span, .switch button[aria-pressed="true"] { background: var(--fg); color: var(--card); font-weight: 600; }
+.switch input:focus-visible + span, .switch button:focus-visible { outline: 2px solid var(--link); outline-offset: -4px; }
+
+/* The document in the making, as sheets in the order of the finished PDF:
+   solid is scanned and held, dashed is still to come. */
+.document { display: grid; gap: .5rem; }
+.sheets { list-style: none; display: flex; flex-wrap: wrap; gap: .3rem; margin: 0; padding: 0; }
+.sheets li { display: grid; place-items: center; width: 1.8rem; height: 2.35rem; border-radius: 3px;
+  border: 1.5px dashed var(--edge); color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
+.sheets li.held { border-style: solid; background: var(--bg); color: var(--fg); font-weight: 600; }
+.sheets li.more { width: auto; border: 0; padding: 0 .2rem; }
+.sheets.scanning li:not(.held):not(.more) { animation: pulse 1.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .sheets.scanning li { animation: none; } }
 
 .note { margin: 0 0 .75rem; padding: .7rem 1rem; border-radius: .5rem; --tone: var(--idle);
   background: color-mix(in srgb, var(--tone) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--tone) 55%, transparent); overflow-wrap: anywhere; }
 .note.ok { --tone: var(--ok); } .note.warn { --tone: var(--bad); }
-main > .note { margin: 0; }
+main > .note, .console .note { margin: 0; }
 [hidden] { display: none; }
 
-/* The two passes of a double-sided scan. */
-.steps { list-style: none; margin: 0 0 .75rem; padding: 0; counter-reset: step; display: grid; gap: .9rem; }
-.steps li { counter-increment: step; display: grid; grid-template-columns: 2rem 1fr; column-gap: .75rem; color: var(--muted); }
-.steps li > * { grid-column: 2; margin: 0; }
-.steps li::before { content: counter(step); grid-column: 1; grid-row: 1 / span 2; align-self: start;
-  width: 2rem; height: 2rem; border-radius: 50%; border: 2px solid var(--edge);
-  display: grid; place-items: center; font-weight: 600; line-height: 1; }
-.steps strong { align-self: center; min-height: 2rem; display: grid; align-items: center; }
-.steps li.current { color: var(--fg); }
-.steps li.current::before { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
-.steps li.done::before { content: "\2713"; border-color: var(--ok); color: var(--ok); }
-
+/* The log is a list on the page, not another card. */
+.log { padding: 0 1.25rem; }
 .scans { list-style: none; margin: 0; padding: 0; }
 .scans li { padding: .6rem 0; border-top: 1px solid var(--line); }
 .scans li:first-child { border-top: 0; padding-top: 0; }
@@ -104,8 +118,6 @@ main > .note { margin: 0; }
 .result.skipped { color: var(--muted); }
 
 @media (min-width: 34rem) {
-  .buttons { grid-template-columns: repeat(2, max-content); }
-  .stack { display: flex; flex-wrap: wrap; }
-  .segmented { display: inline-grid; }
-  .segmented span { min-width: 7rem; }
+  .options { grid-template-columns: 1fr 1fr; }
+  .go { grid-template-columns: repeat(2, minmax(11rem, max-content)); }
 }

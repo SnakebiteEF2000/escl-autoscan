@@ -60,11 +60,11 @@ func (s *Service) scan(ctx context.Context, source escl.InputSource, colorMode s
 	switch {
 	case result != metrics.ResultOK:
 		s.passFailed(pass, &rec)
-	case pass == DoubleSidedFronts:
+	case pass == DoubleSidedWaiting && source == escl.Feeder:
 		s.holdFronts(&rec, docs)
 	case pass == DoubleSidedBacks:
 		s.collateBacks(&rec, docs)
-	case pass == DoubleSidedFlatbed:
+	case pass == DoubleSidedWaiting, pass == DoubleSidedFlatbed:
 		s.holdPage(&rec, docs)
 	default:
 		s.deliver(&rec, docs)
