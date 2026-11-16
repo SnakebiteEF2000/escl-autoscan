@@ -7,7 +7,8 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #1c1917; --card: #292524; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c; --edge: #8a8480;
-    --link: #93c5fd;
+    /* The blue of the light scheme has 2.9:1 against the dark card. */
+    --accent: #60a5fa; --accent-fg: #0b1220; --link: #93c5fd;
     --ok: #4ade80; --warn: #fbbf24; --bad: #f87171; --idle: #a8a29e; --busy: #60a5fa;
   }
 }
@@ -35,6 +36,9 @@ a { color: var(--link); }
   border: 1px solid color-mix(in srgb, var(--tone) 40%, var(--line)); }
 .hero.ok { --tone: var(--ok); } .hero.busy { --tone: var(--busy); }
 .hero.warn { --tone: var(--warn); } .hero.bad { --tone: var(--bad); }
+/* The resting states are on screen nearly all the time. They stay plain, so
+   that a tinted panel means something: scanning, attention or failure. */
+.hero.ok, .hero.idle { background: transparent; border-color: transparent; }
 /* The dot belongs to the panel, not to its content, which is replaced while
    a scan runs: so the pulse is not restarted. */
 .hero::before { content: ""; position: absolute; left: 1.25rem; top: 1.7rem;
@@ -82,7 +86,12 @@ button.quiet { background: none; border-color: transparent; color: var(--fg); fo
 .switch input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
 .switch span, .switch button { display: grid; place-items: center; min-height: 2.75rem; padding: .4rem .75rem;
   border: 0; border-radius: 0; background: transparent; color: var(--fg); font-weight: 400; }
-.switch input:checked + span, .switch button[aria-pressed="true"] { background: var(--fg); color: var(--card); font-weight: 600; }
+/* The selected side is a soft fill with a ring: the scan button stays the
+   one solid element of the console. */
+.switch input:checked + span, .switch button[aria-pressed="true"] { color: var(--link); font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 15%, var(--card)); box-shadow: inset 0 0 0 2px var(--accent); }
+.switch > :first-child span, .switch > button:first-child { border-radius: .42rem 0 0 .42rem; }
+.switch > :last-child span, .switch > button:last-child { border-radius: 0 .42rem .42rem 0; }
 .switch input:focus-visible + span, .switch button:focus-visible { outline: 2px solid var(--link); outline-offset: -4px; }
 
 /* The document in the making, as sheets in the order of the finished PDF:
@@ -99,7 +108,8 @@ button.quiet { background: none; border-color: transparent; color: var(--fg); fo
 .note { margin: 0 0 .75rem; padding: .7rem 1rem; border-radius: .5rem; --tone: var(--idle);
   background: color-mix(in srgb, var(--tone) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--tone) 55%, transparent); overflow-wrap: anywhere; }
-.note.ok { --tone: var(--ok); } .note.warn { --tone: var(--bad); }
+/* Amber asks for attention; red is left for what has failed. */
+.note.ok { --tone: var(--ok); } .note.warn { --tone: var(--warn); }
 main > .note, .console .note { margin: 0; }
 [hidden] { display: none; }
 
@@ -115,6 +125,7 @@ main > .note, .console .note { margin: 0; }
 .scans .small { overflow-wrap: anywhere; }
 .result { margin-left: auto; font-weight: 600; color: var(--bad); }
 .result.ok { color: var(--ok); }
+.result.held { color: var(--muted); } /* held is not saved yet */
 .result.skipped { color: var(--muted); }
 
 @media (min-width: 34rem) {
