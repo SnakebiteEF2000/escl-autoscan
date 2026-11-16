@@ -375,7 +375,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: escl-autoscan
-          image: ghcr.io/snakebiteef2000/escl-autoscan:v0.1.0
+          image: ghcr.io/snakebiteef2000/escl-autoscan:v1.0.0
           env:
             - { name: ESCL_URL, value: "https://192.0.2.10" }
             - { name: ESCL_TLS_FINGERPRINT, value: "<sha-256 fingerprint>" }
@@ -532,7 +532,7 @@ tests with a control page; it is not part of the released image. To run the
 same setup against a real scanner, see the comment at the top of
 `compose.yaml`.
 
-## Upgrading from 0.1
+## Upgrading from 0.2
 
 - Double-sided scans are collated by escl-autoscan now. `DOUBLE_SIDED_SUBDIR`
   is gone: the environment variable is ignored, the flag
