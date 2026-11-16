@@ -162,10 +162,14 @@ func TestDoubleSidedPair(t *testing.T) {
 func TestDoubleSidedFlatbedDoesNotTakePart(t *testing.T) {
 	h, _ := dsHarness(t)
 	h.start()
-	h.pass(escl.Feeder, stack(2, 100))
-	if rec := h.pass(escl.Platen, stack(1, 300)); rec.DoubleSided || len(rec.Files) != 1 || len(pdfs(t, h.out)) != 1 ||
-		h.svc.Snapshot().DoubleSided != DoubleSidedBacks {
+	h.pass(escl.Feeder, stack(1, 100))
+	// One page, like the fronts: if it took part it would be collated.
+	rec := h.pass(escl.Platen, stack(1, 300))
+	if rec.DoubleSided || len(rec.Files) != 1 || h.svc.Snapshot().DoubleSided != DoubleSidedBacks || h.dsTotal(metrics.DoubleSidedDelivered) != 0 {
 		t.Fatalf("platen: %+v", rec)
+	}
+	if got, want := pageWidths(t, h.out), "[300]"; got != want {
+		t.Errorf("flatbed scan = %s, want %s", got, want)
 	}
 }
 
