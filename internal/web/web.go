@@ -11,7 +11,6 @@ import (
 	"html/template"
 	"io/fs"
 	"log/slog"
-	"math"
 	"net/http"
 	"net/url"
 	"time"
@@ -31,7 +30,9 @@ type Scanner interface {
 	Snapshot() autoscan.Snapshot
 	Scan(source escl.InputSource, colorMode string) error
 	SetPaused(paused bool)
-	StartDoubleSided(start bool) error
+	StartDoubleSided() error
+	CancelDoubleSided(discard bool) error
+	FinishDoubleSided() error
 }
 
 // Config configures the UI.
@@ -109,13 +110,19 @@ func New(cfg Config, scanner Scanner, log *slog.Logger) (*Server, error) {
 	}
 
 	tmpl, err := template.New("").Funcs(template.FuncMap{
-		"fmtTime": func(t time.Time) string {
-			if t.IsZero() {
-				return "–"
+		// when is the time of day for today and the date with it otherwise.
+		"when": func(t time.Time) string {
+			t, now := t.In(s.cfg.Location), s.now().In(s.cfg.Location)
+			if t.Year() == now.Year() && t.YearDay() == now.YearDay() {
+				return t.Format("15:04:05")
 			}
-			return t.In(s.cfg.Location).Format("2006-01-02 15:04:05")
+			return t.Format("2006-01-02 15:04")
 		},
-		"fmtDur": func(d time.Duration) string { return d.Round(time.Second).String() },
+		"stamp":       func(t time.Time) string { return t.In(s.cfg.Location).Format(time.RFC3339) },
+		"sourceName":  sourceName,
+		"resultLabel": resultLabel,
+		"pageCount":   pageCount,
+		"plural":      plural,
 	}).ParseFS(assets, "templates/*.html")
 	if err != nil {
 		return nil, err
@@ -128,9 +135,7 @@ func New(cfg Config, scanner Scanner, log *slog.Logger) (*Server, error) {
 	mux.HandleFunc("GET /{$}", s.handleIndex)
 	mux.HandleFunc("POST /scan", s.withPost(s.handleScan))
 	mux.HandleFunc("POST /pause", s.withPost(s.handlePause))
-	if scanner.Snapshot().DoubleSidedEnabled {
-		mux.HandleFunc("POST /double-sided", s.withPost(s.handleDoubleSided))
-	}
+	mux.HandleFunc("POST /double-sided", s.withPost(s.handleDoubleSided))
 	if s.oidc != nil {
 		mux.HandleFunc("GET /auth/login", s.handleLogin)
 		mux.HandleFunc("GET /auth/callback", s.handleCallback)
@@ -143,7 +148,9 @@ func New(cfg Config, scanner Scanner, log *slog.Logger) (*Server, error) {
 // ServeHTTP adds security headers and dispatches.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
-	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+	// script-src and connect-src are for static/live.js, which fetches the
+	// page again to keep it current.
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; img-src 'self'; script-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("X-Frame-Options", "DENY")
 	h.Set("Referrer-Policy", "same-origin")
@@ -166,14 +173,23 @@ func (s *Server) Prewarm() {
 
 type pageData struct {
 	Snap    autoscan.Snapshot
+	Hero    hero
+	Feeder  string // the feeder state in words
 	User    string
 	Auth    bool
 	CSRF    string
 	Gray    bool // preselect gray in the color choice
 	Error   string
-	Refresh int // seconds
+	Refresh int // seconds between reloads without JavaScript
+	// Auto: paper put into the feeder is scanned without pressing a button.
+	Auto bool
+	// PassBusy: a scan that takes part in the double-sided run is running,
+	// so the run cannot be saved or cancelled now.
+	PassBusy bool
 	// DSRemaining is the time left in the current double-sided step.
 	DSRemaining string
+	// Doc pictures the double-sided document in the making.
+	Doc document
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -186,18 +202,19 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) renderIndex(w http.ResponseWriter, code int, sess *session, raw, errMsg string) {
-	snap := s.scanner.Snapshot()
-	refresh := 30
-	if snap.Scanning != nil || snap.Settling {
+	snap, now := s.scanner.Snapshot(), s.now()
+	refresh := 15
+	if snap.Scanning != nil || snap.Settling || snap.DoubleSided != autoscan.DoubleSidedOff {
 		refresh = 3
 	}
-	remaining := ""
-	if snap.DoubleSided != autoscan.DoubleSidedOff {
-		remaining = fmt.Sprintf("%d min", int(math.Ceil(max(time.Until(snap.DoubleSidedDeadline), 0).Minutes())))
-	}
 	s.render(w, code, "index.html", pageData{
-		Snap: snap, User: sess.display(), Auth: s.oidc != nil, CSRF: s.csrfToken(raw),
-		Gray: snap.ColorMode != "RGB24", Error: errMsg, Refresh: refresh, DSRemaining: remaining,
+		Snap: snap, Hero: newHero(snap, now), Feeder: feederLabel(snap.AdfState),
+		User: sess.display(), Auth: s.oidc != nil, CSRF: s.csrfToken(raw),
+		Gray: snap.ColorMode != "RGB24", Error: errMsg, Refresh: refresh,
+		Auto:        snap.AutoscanEnabled && !snap.Paused,
+		PassBusy:    snap.Scanning != nil && snap.Scanning.Pass != autoscan.DoubleSidedOff,
+		DSRemaining: minutes(snap.DoubleSidedDeadline.Sub(now)),
+		Doc:         newDocument(snap),
 	})
 }
 
@@ -271,19 +288,30 @@ func (s *Server) handlePause(w http.ResponseWriter, r *http.Request, sess *sessi
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-func (s *Server) handleDoubleSided(w http.ResponseWriter, r *http.Request, sess *session, _ string) {
+func (s *Server) handleDoubleSided(w http.ResponseWriter, r *http.Request, sess *session, raw string) {
 	var err error
 	switch r.PostFormValue("action") {
 	case "start":
-		err = s.scanner.StartDoubleSided(true)
-	case "cancel":
-		err = s.scanner.StartDoubleSided(false)
+		err = s.scanner.StartDoubleSided()
+	case "off":
+		err = s.scanner.CancelDoubleSided(false)
+	case "discard":
+		err = s.scanner.CancelDoubleSided(true)
+	case "finish":
+		err = s.scanner.FinishDoubleSided()
 	default:
 		s.renderError(w, http.StatusBadRequest, "Unknown action.")
 		return
 	}
-	if err != nil {
-		s.renderError(w, http.StatusConflict, "Double-sided: "+err.Error()+".")
+	switch {
+	case errors.Is(err, autoscan.ErrBusy):
+		s.renderIndex(w, http.StatusConflict, sess, raw, "A scan is running. Wait until it has finished.")
+		return
+	case errors.Is(err, autoscan.ErrPagesHeld):
+		s.renderIndex(w, http.StatusConflict, sess, raw, "Scans are held for a double-sided document. Save or discard them first.")
+		return
+	case err != nil:
+		s.renderIndex(w, http.StatusServiceUnavailable, sess, raw, "Double-sided: "+err.Error()+".")
 		return
 	}
 	s.log.Info("double-sided changed", "action", r.PostFormValue("action"), "user", sess.display())

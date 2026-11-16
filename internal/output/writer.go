@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -16,17 +17,21 @@ import (
 const FileMode fs.FileMode = 0o644
 
 // Writer writes scans into a directory without ever exposing a partial file
-// under its final name.
+// under its final name. It is safe for concurrent use.
 type Writer struct {
 	Dir      string         // OUTPUT_DIR
 	Location *time.Location // time zone for file names; UTC when nil
 	Log      *slog.Logger   // optional
+
+	mu sync.Mutex // one Write at a time, see the name check in Write
 }
 
 // Write stores data as scan-YYYYMMDD-HHMMSS[-N][-suffix].pdf and returns the
 // file name. The data is written to a ".part" file first (Paperless only
 // consumes known extensions, so it ignores it), synced, and then renamed.
 func (w *Writer) Write(data []byte, at time.Time, suffix string) (string, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	loc := w.Location
 	if loc == nil {
 		loc = time.UTC
@@ -67,8 +72,8 @@ func (w *Writer) Write(data []byte, at time.Time, suffix string) (string, error)
 		return "", err
 	}
 
-	// Only this process writes scan-* names, one scan at a time, so a
-	// check-then-rename cannot race with another writer.
+	// Only this process writes scan-* names, and w.mu allows one Write at a
+	// time, so a check-then-rename cannot race with another writer.
 	name := base + ".pdf"
 	for i := 2; ; i++ {
 		if _, err := os.Lstat(filepath.Join(w.Dir, name)); errors.Is(err, fs.ErrNotExist) {

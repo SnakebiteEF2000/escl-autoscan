@@ -1,51 +1,134 @@
 :root {
-  --bg: #f5f5f4; --card: #ffffff; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4;
-  --accent: #2563eb; --accent-fg: #ffffff; --ok: #16a34a; --warn: #d97706; --bad: #dc2626;
+  --bg: #f5f5f4; --card: #ffffff; --fg: #1c1917; --muted: #6b645f; --line: #e7e5e4; --edge: #918a85;
+  --accent: #2563eb; --accent-fg: #ffffff; --link: #1d4ed8;
+  --ok: #15803d; --warn: #b45309; --bad: #b91c1c; --idle: #78716c; --busy: #2563eb;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #1c1917; --card: #292524; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c;
-    --accent: #3b82f6;
+    --bg: #1c1917; --card: #292524; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c; --edge: #8a8480;
+    /* The blue of the light scheme has 2.9:1 against the dark card. */
+    --accent: #60a5fa; --accent-fg: #0b1220; --link: #93c5fd;
+    --ok: #4ade80; --warn: #fbbf24; --bad: #f87171; --idle: #a8a29e; --busy: #60a5fa;
   }
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg);
-  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
-header { display: flex; align-items: center; justify-content: space-between;
-  max-width: 56rem; margin: 0 auto; padding: 1rem; }
-h1 { font-size: 1.4rem; margin: 0; }
-h2 { font-size: 1rem; margin: 0 0 .75rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
-main { max-width: 56rem; margin: 0 auto; padding: 0 1rem 2rem; display: grid; gap: 1rem; }
+  font: 1rem/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header, main { max-width: 44rem; margin: 0 auto; padding: 0 1rem; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-top: 1rem; padding-bottom: .75rem; }
+main { display: grid; gap: 1rem; padding-bottom: 2.5rem; }
 main.narrow { max-width: 28rem; padding-top: 3rem; }
-.card { background: var(--card); border: 1px solid var(--line); border-radius: .75rem; padding: 1rem 1.25rem; }
-dl { display: grid; grid-template-columns: max-content 1fr; gap: .35rem 1.25rem; margin: 0; }
-dt { color: var(--muted); }
-dd { margin: 0; overflow-wrap: anywhere; }
-.dot { display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; margin-right: .4rem; vertical-align: .05rem; }
-.dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
-.controls { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; }
-fieldset { border: 1px solid var(--line); border-radius: .5rem; padding: .25rem .75rem .5rem; margin: 0; }
-legend { color: var(--muted); font-size: .85rem; padding: 0 .25rem; }
-fieldset label { margin-right: .75rem; white-space: nowrap; }
-.buttons { display: flex; flex-wrap: wrap; gap: .5rem; }
-button { font: inherit; border: 0; border-radius: .5rem; padding: .6rem 1.1rem; cursor: pointer;
-  background: var(--accent); color: var(--accent-fg); }
-button:disabled { opacity: .5; cursor: not-allowed; }
-button.secondary { background: transparent; color: var(--fg); border: 1px solid var(--line); }
-button.link { background: none; color: var(--accent); padding: 0; }
-.pause { margin-top: 1rem; }
-.user { display: flex; gap: .75rem; align-items: center; color: var(--muted); }
-.banner { margin: 0; padding: .75rem 1rem; border-radius: .5rem; }
-.banner.error { background: color-mix(in srgb, var(--bad) 15%, transparent); border: 1px solid var(--bad); }
-.table { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: .45rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { color: var(--muted); font-weight: 500; font-size: .85rem; }
-.file { font-family: ui-monospace, monospace; font-size: .85rem; overflow-wrap: anywhere; }
-.muted { color: var(--muted); } .small { font-size: .85rem; }
-.result { font-weight: 600; }
+h1 { font-size: 1.4rem; line-height: 1.2; margin: 0; }
+h2 { font-size: 1rem; margin: 0 0 .75rem; }
+p { margin: 0 0 .75rem; }
+header p { margin: 0; min-height: 1.3em; }
+a { color: var(--link); }
+:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+.muted { color: var(--muted); } .small { font-size: .875rem; }
+
+.card { background: var(--card); border: 1px solid var(--line); border-radius: .75rem; padding: 1rem 1.25rem 1.25rem; }
+.card > :last-child, .card form > :last-child { margin-bottom: 0; }
+
+/* What the scanner is doing right now. The tone colors the whole panel. */
+.hero { --tone: var(--idle); position: relative; border-radius: .75rem; padding: 1.1rem 1.25rem 1.1rem 2.9rem;
+  background: color-mix(in srgb, var(--tone) 9%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--tone) 40%, var(--line)); }
+.hero.ok { --tone: var(--ok); } .hero.busy { --tone: var(--busy); }
+.hero.warn { --tone: var(--warn); } .hero.bad { --tone: var(--bad); }
+/* The resting states are on screen nearly all the time. They stay plain, so
+   that a tinted panel means something: scanning, attention or failure. */
+.hero.ok, .hero.idle { background: transparent; border-color: transparent; }
+/* The dot belongs to the panel, not to its content, which is replaced while
+   a scan runs: so the pulse is not restarted. */
+.hero::before { content: ""; position: absolute; left: 1.25rem; top: 1.7rem;
+  width: .7rem; height: .7rem; border-radius: 50%; background: var(--tone); }
+.hero.busy::before { animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .hero.busy::before { animation: none; } }
+.hero h2 { font-size: 1.5rem; line-height: 1.25; margin: 0 0 .35rem; }
+.hero > p { max-width: 36rem; }
+.facts { display: flex; flex-wrap: wrap; gap: .25rem 1.25rem; margin: .9rem 0 0; font-size: .875rem; }
+.facts div { display: flex; gap: .4rem; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.facts + p { margin: .5rem 0 0; overflow-wrap: anywhere; }
+
+button { font: inherit; font-weight: 600; min-height: 2.75rem; padding: .6rem 1.1rem; cursor: pointer;
+  border: 1px solid transparent; border-radius: .5rem; background: var(--accent); color: var(--accent-fg); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.secondary { background: transparent; color: var(--fg); border-color: var(--edge); }
+/* An action that does not need a button's weight: pause, discard, log out. */
+button.quiet { background: none; border-color: transparent; color: var(--fg); font-weight: 400;
+  text-decoration: underline; text-underline-offset: .15em; padding-left: 0; padding-right: 0; }
+.user { display: flex; gap: .75rem; align-items: center; color: var(--muted); font-size: .875rem; }
+.user span { overflow-wrap: anywhere; }
+.user button { min-height: 0; padding: 0; }
+
+/* The console: everything that starts or shapes a scan, in one place. A
+   control keeps its place in every mode; the mode changes what a scan adds
+   to. */
+.console { display: grid; gap: .9rem; background: var(--card); border: 1px solid var(--line); border-radius: .75rem;
+  padding: 1.1rem 1.25rem; }
+.console > div:empty { display: none; }
+.console p { margin: 0; }
+.options { display: grid; gap: .5rem; }
+.go { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+.finish { display: flex; flex-wrap: wrap; align-items: center; gap: 0 1.25rem; }
+.autoscan { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 1rem;
+  padding-top: .5rem; border-top: 1px solid var(--line); }
+.autoscan p { flex: 1 1 14rem; padding-top: .4rem; }
+
+/* Two choices that look alike: gray or color (radio buttons, sent with the
+   scan) and single- or double-sided (buttons, a state of the service). */
+.switch { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--edge); border-radius: .5rem; overflow: hidden; }
+.switch label { position: relative; }
+.switch input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.switch span, .switch button { display: grid; place-items: center; min-height: 2.75rem; padding: .4rem .75rem;
+  border: 0; border-radius: 0; background: transparent; color: var(--fg); font-weight: 400; }
+/* The selected side is a soft fill with a ring: the scan button stays the
+   one solid element of the console. */
+.switch input:checked + span, .switch button[aria-pressed="true"] { color: var(--link); font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 15%, var(--card)); box-shadow: inset 0 0 0 2px var(--accent); }
+.switch > :first-child span, .switch > button:first-child { border-radius: .42rem 0 0 .42rem; }
+.switch > :last-child span, .switch > button:last-child { border-radius: 0 .42rem .42rem 0; }
+.switch input:focus-visible + span, .switch button:focus-visible { outline: 2px solid var(--link); outline-offset: -4px; }
+
+/* The document in the making, as sheets in the order of the finished PDF:
+   solid is scanned and held, dashed is still to come. */
+.document { display: grid; gap: .5rem; }
+.sheets { list-style: none; display: flex; flex-wrap: wrap; gap: .3rem; margin: 0; padding: 0; }
+.sheets li { display: grid; place-items: center; width: 1.8rem; height: 2.35rem; border-radius: 3px;
+  border: 1.5px dashed var(--edge); color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
+.sheets li.held { border-style: solid; background: var(--bg); color: var(--fg); font-weight: 600; }
+.sheets li.more { width: auto; border: 0; padding: 0 .2rem; }
+.sheets.scanning li:not(.held):not(.more) { animation: pulse 1.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .sheets.scanning li { animation: none; } }
+
+.note { margin: 0 0 .75rem; padding: .7rem 1rem; border-radius: .5rem; --tone: var(--idle);
+  background: color-mix(in srgb, var(--tone) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tone) 55%, transparent); overflow-wrap: anywhere; }
+/* Amber asks for attention; red is left for what has failed. */
+.note.ok { --tone: var(--ok); } .note.warn { --tone: var(--warn); }
+main > .note, .console .note { margin: 0; }
+[hidden] { display: none; }
+
+/* The log is a list on the page, not another card. */
+.log { padding: 0 1.25rem; }
+.scans { list-style: none; margin: 0; padding: 0; }
+.scans li { padding: .6rem 0; border-top: 1px solid var(--line); }
+.scans li:first-child { border-top: 0; padding-top: 0; }
+.scans li:last-child { padding-bottom: 0; }
+.line { display: flex; flex-wrap: wrap; align-items: baseline; gap: .1rem .75rem; }
+.line time { font-variant-numeric: tabular-nums; }
+.file { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: .875rem; overflow-wrap: anywhere; }
+.scans .small { overflow-wrap: anywhere; }
+.result { margin-left: auto; font-weight: 600; color: var(--bad); }
 .result.ok { color: var(--ok); }
+.result.held { color: var(--muted); } /* held is not saved yet */
 .result.skipped { color: var(--muted); }
-.result.aborted, .result.incomplete_pdf, .result.error, .result.busy, .result.wake_glitch { color: var(--bad); }
-a { color: var(--accent); }
+
+@media (min-width: 34rem) {
+  .options { grid-template-columns: 1fr 1fr; }
+  .go { grid-template-columns: repeat(2, minmax(11rem, max-content)); }
+}

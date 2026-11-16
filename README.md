@@ -8,17 +8,20 @@ automatic document feeder (ADF), it scans the stack and writes a validated
 multi-page PDF into a folder. If that folder is Paperless-ngx's consume
 folder, Paperless picks it up.
 
-It also serves a small web page, behind OpenID Connect login. The page shows
-the scanner status and the last scans, and has buttons to scan from the
-feeder or the flatbed, a gray/color choice and pause/resume. Prometheus
-metrics are on a separate port.
+It also serves a small web page, behind OpenID Connect login. The page says
+what the scanner is doing right now and what to do next, and updates itself
+every two seconds. It has buttons to scan from the feeder or the flatbed, a
+gray/color choice, pause/resume, and a [double-sided](#double-sided-originals)
+mode: both sides of a stack from a feeder that scans one side only, or page
+after page from the flatbed, as one PDF. It is made for a phone held next to
+the scanner. Prometheus metrics are on a separate port.
 
 The first target device is the Epson WorkForce WF-2960 (eSCL 2.9). Any eSCL
 scanner that reports `AdfState` should work; see [Epson notes](#epson-notes)
 for the quirks handled here.
 
-- Single static Go binary, no CGO. Three dependencies: go-oidc, x/oauth2 and
-  the Prometheus client.
+- Single static Go binary, no CGO. Four dependencies: go-oidc, x/oauth2, the
+  Prometheus client and pdfcpu (to collate double-sided scans).
 - Runs as uid 65532 on a read-only root filesystem with no capabilities.
 - Apache-2.0.
 
@@ -86,6 +89,11 @@ The service polls `GET /eSCL/ScannerStatus` every `POLL_INTERVAL`:
    discarded if it is unset. They never go to `OUTPUT_DIR`.
 7. `DELETE` the job. This is best effort; 404 is normal.
 
+In [double-sided](#double-sided-originals) mode, step 5 differs: scans that
+passed steps 1 to 4 are held in memory until the document is complete (the
+backs have arrived, or the flatbed document is saved). Then they become one
+PDF, which is validated and delivered like any other.
+
 On SIGTERM no new scan starts. A running scan may finish for up to 60s; after
 that its job is cancelled and deleted on the device.
 
@@ -115,8 +123,7 @@ them all.
 | `SCAN_HEIGHT` | `3508` | Scan height in 1/300 inch (3508 = A4, 3300 = Letter). |
 | `SCAN_X_OFFSET` | `0` | Horizontal offset in 1/300 inch. |
 | `OUTPUT_DIR` | *(required)* | Where finished PDFs go, e.g. `<consume>/scanner`. |
-| `DOUBLE_SIDED_SUBDIR` | `double-sided` | Folder below `OUTPUT_DIR` for [double-sided](#double-sided-originals-with-paperless) passes; created at startup. One plain folder name (no `/`, not `.`/`..`, no leading dot). Empty turns the feature off and hides the button. |
-| `DOUBLE_SIDED_TIMEOUT` | `30m` | Double-sided mode ends if the next pass does not arrive in time; counted from starting the mode and again from the fronts. Matches Paperless' 30-minute window. |
+| `DOUBLE_SIDED_TIMEOUT` | `30m` | [Double-sided](#double-sided-originals) mode ends if the next scan does not arrive in time. The time starts again with every step, every flatbed page and after a failed scan. What is already scanned is then saved: fronts as a single-sided scan, flatbed pages as one document. |
 | `FAILED_DIR` | *(discard)* | Keep rejected and partial scans here. Must be outside `OUTPUT_DIR` and `BACKLOG_DIR`; this is checked at startup. |
 | `BACKLOG_DIR` | | Paperless consume root. Enables the backlog metrics. |
 | `TZ` | `UTC` | Time zone for file names and the UI, e.g. `Europe/Berlin`. The zone database is built in. |
@@ -153,66 +160,123 @@ All metrics are on `METRICS_ADDR` with the prefix `escl_autoscan_`:
 | `adf_state{state}` | 1 for the current ADF state, 0 for the others. |
 | `armed`, `paused` | Autoscan state. |
 | `scans_total{source,result}` | `source` is `feeder` or `platen`. `result` is one of `ok`, `aborted`, `incomplete_pdf`, `busy`, `error`, `wake_glitch` or `skipped`. |
-| `pages_total` | Pages delivered. |
-| `last_success_timestamp_seconds` | Time of the last delivered scan. |
+| `pages_total` | Pages of successful scans. Each pass of a double-sided scan counts its own pages. |
+| `last_success_timestamp_seconds` | Time of the last successful scan. Fronts held for a double-sided scan count. |
 | `scan_duration_seconds` | Histogram of job durations. |
-| `double_sided_state` | 0 off, 1 waiting for the fronts, 2 waiting for the backs. |
-| `double_sided_total{result}` | Finished double-sided runs: `delivered`, `timeout`, `cancelled` (by the user) or `failed` (a pass failed). |
+| `double_sided_state` | 0 off, 1 on and waiting for the first scan, 2 holding the fronts and waiting for the backs, 3 collecting the pages of a flatbed document. |
+| `double_sided_total{result}` | Finished double-sided runs, from the feeder or the flatbed: `delivered` (one PDF), `timeout` (what was held was saved), `cancelled` (by the user; what was held was discarded) or `failed` (the PDFs could not be combined and were delivered as they are). |
 | `backlog_files`, `backlog_oldest_age_seconds` | Only with `BACKLOG_DIR`. Counts consumable files (`.pdf .png .jpg .jpeg .tif .tiff .webp .txt .eml`) below the consume root, every 60s. `.part` files and dotfiles are ignored. A growing age means Paperless is not consuming. |
 
 `/healthz` reports that the process is alive. `/readyz` checks that
 `OUTPUT_DIR` is reachable. Neither depends on the scanner, because a sleeping
 printer is normal.
 
-## Double-sided originals with Paperless
+## Double-sided originals
 
-The WF-2960 feeder scans one side only. Paperless-ngx can collate two
-single-sided passes into one document: it parks the first file from a folder
-named `double-sided` (the fronts), and when a second file arrives there
-within 30 minutes (the backs), it reverses the second file's pages,
-interleaves them with the fronts and consumes the result. Enable it in
-Paperless; it also needs `PAPERLESS_CONSUMER_RECURSIVE=true`:
+Double-sided mode delivers **one PDF** made of several scans, with the pages
+in order. Paperless sees a normal document; it needs no setting for this.
+Switch **Double-sided** on in the scan console; the first scan after that
+decides what the document is. One document at a time.
 
-```sh
-PAPERLESS_CONSUMER_ENABLE_COLLATE_DOUBLE_SIDED=true
-```
+### From the feeder
 
-`DOUBLE_SIDED_SUBDIR` must match Paperless' folder name
-(`PAPERLESS_CONSUMER_COLLATE_DOUBLE_SIDED_SUBDIR_NAME`, default
-`double-sided`). escl-autoscan creates `OUTPUT_DIR/double-sided` at startup;
-Paperless does not create it.
+The WF-2960 feeder scans one side only, so a stack is scanned twice, fronts
+and then backs.
 
-1. Press **Double-sided** in the UI. The status line says "insert the
-   fronts".
+1. Switch **Double-sided** on. The page shows the document as a row of
+   sheets: scanned ones solid, the ones still to come dashed.
 2. Put the stack into the feeder. The next successful feeder scan, automatic
-   or via "Scan feeder", goes to `OUTPUT_DIR/double-sided/`.
+   or via "Scan feeder", is the fronts. They are held in memory; nothing is
+   written yet.
 3. Take the stack out of the output tray as it is, turn it over without
-   re-sorting, and put it back into the feeder. Paperless reverses the second
-   pass itself. With autoscan on, the stack must count as new: the feeder has
-   to report empty between the passes, which it does when you take the paper
-   out. With autoscan paused, press "Scan feeder" for each pass.
-4. The second successful feeder scan also goes to the folder, and the mode
-   switches off ("double-sided pair delivered"). The next scan is normal again.
+   re-sorting it, and put it back into the feeder. With autoscan on, the
+   stack counts as new because the feeder was empty in between. With
+   autoscan paused, press "Scan feeder" for each pass.
+4. The second successful feeder scan is the backs. Turning the stack over
+   reversed it, so the backs arrive last sheet first; escl-autoscan takes
+   them in reverse order and puts each behind its front. The PDF goes to
+   `OUTPUT_DIR` like any other scan, and the mode switches off.
+
+### From the flatbed
+
+On the glass a document is scanned page after page, both sides of each sheet
+in reading order. Nothing has to be re-sorted; the pages are joined in the
+order they were scanned. This also works for a book or for single-sided
+pages that should become one document.
+
+1. Switch **Double-sided** on.
+2. Put the first page on the glass and press **Scan flatbed** (the gray or
+   color choice applies, and stays selected for the following pages). The
+   page is held in memory.
+3. Turn the sheet over, or put the next one on the glass, and press **Scan
+   flatbed** again. Repeat for every page; the page shows the sheets held.
+4. Press **Save document**. The pages go to `OUTPUT_DIR` as one PDF. A
+   document of a single page is delivered exactly as scanned.
+
+Once the first flatbed page is held, feeder scans do not take part: paper
+put into the feeder meanwhile is scanned and delivered as usual.
+
+The first scan decides, whichever it is. Between switching on and that scan,
+a stack that autoscan picks up from the feeder becomes the fronts.
+
+### When something goes wrong
+
+- **A flatbed scan fails**: the pages scanned before stay held; scan the page
+  again.
+- **A pass fails** (jam, aborted job, incomplete PDF, busy scanner): the mode
+  stays on and held fronts stay. Clear the feeder, put the stack back and
+  the pass is scanned again.
+- **The second scan has another page count than the fronts**, usually
+  because the feeder pulled two sheets at once: it cannot be their backs, so
+  nothing is collated and the fronts stay. Scan the backs again, or cancel
+  and start over if the fronts were the short pass. The scan itself is
+  valid (it may also be a letter somebody scanned in between), so it is
+  delivered as a normal single-sided scan and the page names the file;
+  delete it in Paperless if it was meant to be the backs.
+- **Discard** ends the mode and throws away what is held (the fronts, or the
+  flatbed pages so far); the button says so. Switching back to
+  **Single-sided** is only possible while nothing is held, so it never
+  loses a scan.
+- **Timeout** (`DOUBLE_SIDED_TIMEOUT`, 30 minutes per step or page) and
+  **shutdown** never discard: held fronts are saved as a normal single-sided
+  scan, held flatbed pages as one document. You may have walked away
+  believing the document was scanned. The timeout waits for a stack that is
+  already detected in the feeder. If `OUTPUT_DIR` cannot be written when the
+  time is up, or when you press Save document, everything stays held and
+  the time starts again; at shutdown it goes to `FAILED_DIR` instead.
+- **The PDFs cannot be collated**: pdfcpu reads and rewrites the scanner's
+  PDFs. If it cannot read one, the scan is not lost: the fronts are checked
+  when they arrive and delivered as a normal scan if they are unreadable,
+  and if collating fails later, fronts and backs are delivered unchanged as
+  two files. Flatbed pages that cannot be joined are delivered unchanged,
+  one file per scan. The page and the log say why.
+
+The rule behind all of these: a scan that passed validation is never thrown
+away because of double-sided mode. It is held, collated, or delivered as a
+normal scan. Only the Discard button discards, and only what is held.
 
 Details:
 
-- Flatbed scans always go to the normal output and do not change the mode.
-- The mode times out after `DOUBLE_SIDED_TIMEOUT`, counted from pressing the
-  button and again from the fronts. The next scan then goes to the normal
-  output.
-- If a feeder pass fails (`aborted`, `incomplete_pdf`, `error`, or
-  `wake_glitch` without a successful retry), the mode is cancelled and the
-  failed scan never goes to the folder. If this happens on the backs, the
-  fronts are already parked in Paperless; Paperless pairs them with the next
-  double-sided file within 30 minutes and discards them after that. So either
-  start double-sided again and scan **only the backs**, or wait 30 minutes
-  before scanning both passes again. The UI shows this. A busy scanner or a
-  skipped autoscan does not count as a failed pass.
-- A feeder job that returns more than one document cannot be one pass of a
-  pair; its files go to the normal output and the mode is cancelled. (The
-  WF-2960 returns one PDF per job.)
-- "Cancel double-sided" ends the mode at any time.
-- The mode lives in memory. A restart turns it off.
+- One document, one look: the backs are scanned in the color mode of the
+  fronts, also when autoscan starts them, and the page preselects the mode
+  of the scans held so far. Choosing another mode for a scan still works.
+- The role of a scan is fixed when it starts. Switching double-sided on is
+  refused while a scan runs; saving and discarding are refused, and the
+  timeout waits, while a scan that takes part runs.
+- After the first scan, scans from the other source do not take part:
+  flatbed scans during a feeder run and feeder scans during a flatbed
+  document go to the normal output and do not change the mode.
+- A pass may consist of several documents (some devices return one per
+  page); they count as one sequence. The WF-2960 returns one PDF per job.
+- Pages are moved as they are: images are not re-encoded, and their bytes
+  are identical to what the scanner sent. The collated file is rewritten by
+  pdfcpu (PDF 1.7, classic cross-reference table).
+- What is held and the mode live in memory. A crash loses them; a normal
+  shutdown saves what is held.
+- Collating needs, for a moment, about five times the size of the finished
+  PDF in memory. A 100-page gray document of 40 MB is no concern; 100 color
+  pages of 1.5 MB each need about 750 MB. Size the memory limit for the
+  largest stack you scan double-sided.
 
 ## Epson notes
 
@@ -336,7 +400,9 @@ spec:
             httpGet: { path: /healthz, port: metrics }
           resources:
             requests: { cpu: 10m, memory: 32Mi }
-            limits: { memory: 512Mi }  # documents are held in memory until validated
+            # Scans are held in memory until validated; collating a
+            # double-sided scan needs about five times its size for a moment.
+            limits: { memory: 1Gi }
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -389,6 +455,8 @@ PAPERLESS_CONSUMER_POLLING_INTERVAL=10    # inotify does not work on NFS; poll e
 - Paperless only consumes known extensions, so it ignores the `.part` file
   while a scan is being written. The rename makes the PDF appear complete in
   one step.
+- Double-sided scans arrive as one finished PDF. Paperless' own collation
+  (`PAPERLESS_CONSUMER_COLLATE_DOUBLE_SIDED`) is not used and can stay off.
 - Paperless deletes consumed files, so it needs write access to
   `<consume>/scanner`.
 - Set `BACKLOG_DIR` to the consume root and alert on
@@ -421,8 +489,12 @@ PAPERLESS_CONSUMER_POLLING_INTERVAL=10    # inotify does not work on NFS; poll e
 - **Secrets** (client secret, session key) are never logged. Prefer the
   `_FILE` variants or Kubernetes Secrets over command-line flags.
 - The container runs as uid 65532 on a read-only root filesystem with no
-  capabilities. The UI sends a strict Content-Security-Policy and uses no
-  JavaScript.
+  capabilities.
+- **Content-Security-Policy.** The UI allows scripts, styles, images and
+  requests from its own origin only, and nothing inline. Its one script
+  (`static/live.js`, about 110 lines, no library) fetches the page again every
+  two seconds and replaces the parts that changed. Without JavaScript the
+  page works the same and reloads itself instead.
 
 ## Development
 
@@ -437,6 +509,41 @@ The tests run against a fake eSCL server (`internal/escltest`) that mimics
 the WF-2960: the Host header with port, absolute job `Location`, 503 retries,
 a jam with a truncated PDF and 410, and the wake glitch. Fixtures in
 `internal/escltest/testdata` are sanitized captures from the device.
+
+### Trying it without a scanner
+
+`compose.yaml` starts escl-autoscan together with a simulated scanner, without
+login:
+
+```sh
+docker compose up --build -d
+```
+
+- <http://localhost:8080> is the UI.
+- <http://localhost:8081> is the simulator. It plays the person at the
+  scanner: put a stack into the feeder, turn it over, take it out, cause a
+  jam or a double feed, put the scanner to sleep.
+- `./local/output` receives the PDFs. Every page says what it is ("A2 back":
+  stack A, sheet 2, back side), so the order of a collated document is easy
+  to check.
+
+The simulator is `internal/escltest/simulator`, the fake eSCL server of the
+tests with a control page; it is not part of the released image. To run the
+same setup against a real scanner, see the comment at the top of
+`compose.yaml`.
+
+## Upgrading from 0.1
+
+- Double-sided scans are collated by escl-autoscan now. `DOUBLE_SIDED_SUBDIR`
+  is gone: the environment variable is ignored, the flag
+  `-double-sided-subdir` is an error. The folder `OUTPUT_DIR/double-sided` is
+  no longer used and can be removed, and Paperless'
+  `PAPERLESS_CONSUMER_COLLATE_DOUBLE_SIDED` is no longer needed.
+- The UI uses one same-origin script. If a proxy in front of it sets its own
+  Content-Security-Policy, that policy must allow `script-src 'self'` and
+  `connect-src 'self'`; otherwise the page no longer updates itself.
+- Collating a double-sided scan needs more memory than a plain scan; see
+  [Double-sided originals](#double-sided-originals).
 
 ## License
 

@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -39,7 +38,6 @@ type config struct {
 
 	OutputDir string
 
-	DoubleSidedSubdir  string
 	DoubleSidedTimeout time.Duration
 	FailedDir          string
 	BacklogDir         string
@@ -106,8 +104,7 @@ func parseConfig(args []string, getenv func(string) (string, bool), out io.Write
 	fs.IntVar(&c.ScanXOffset, "scan-x-offset", 0, "horizontal offset in 1/300 inch")
 
 	fs.StringVar(&c.OutputDir, "output-dir", "", "directory for finished PDFs, e.g. <paperless consume>/scanner (required)")
-	fs.StringVar(&c.DoubleSidedSubdir, "double-sided-subdir", "double-sided", "folder below OUTPUT_DIR for double-sided passes, collated by Paperless (empty: feature off)")
-	fs.DurationVar(&c.DoubleSidedTimeout, "double-sided-timeout", 30*time.Minute, "double-sided mode ends if a pass does not arrive within this time (Paperless waits 30m)")
+	fs.DurationVar(&c.DoubleSidedTimeout, "double-sided-timeout", 30*time.Minute, "double-sided mode ends if the next pass does not arrive within this time; fronts already scanned are then saved single-sided")
 	fs.StringVar(&c.FailedDir, "failed-dir", "", "keep rejected or partial scans here (must be outside the consume directory); default: discard")
 	fs.StringVar(&c.BacklogDir, "backlog-dir", "", "Paperless consume root to export backlog metrics for (optional)")
 	fs.StringVar(&c.TZ, "tz", "", "time zone for file names and the UI, e.g. Europe/Berlin (default UTC)")
@@ -197,7 +194,6 @@ func (c *config) validate() error {
 	check(c.ScanWidth > 0 && c.ScanHeight > 0 && c.ScanXOffset >= 0, "SCAN_WIDTH and SCAN_HEIGHT must be positive, SCAN_X_OFFSET not negative")
 	check(c.SessionTTL > 0, "SESSION_TTL must be positive")
 	check(c.DoubleSidedTimeout > 0, "DOUBLE_SIDED_TIMEOUT must be positive")
-	check(validSubdir(c.DoubleSidedSubdir), "DOUBLE_SIDED_SUBDIR must be a single folder name (no /, not . or .., not starting with a dot)")
 	check(slices.Contains([]string{"debug", "info", "warn", "error"}, c.LogLevel), "LOG_LEVEL must be debug, info, warn or error")
 	check(c.LogFormat == "json" || c.LogFormat == "text", "LOG_FORMAT must be json or text")
 
@@ -218,16 +214,6 @@ func (c *config) validate() error {
 	check(err == nil, "%v", err)
 	c.SessionKey = key
 	return errors.Join(errs...)
-}
-
-// validSubdir accepts an empty name (feature off) or one plain path
-// element. Dot-prefixed names are refused: they are hidden, and the backlog
-// scan skips them.
-func validSubdir(name string) bool {
-	if name == "" {
-		return true
-	}
-	return !strings.ContainsAny(name, `/\`) && !strings.HasPrefix(name, ".") && filepath.Base(name) == name
 }
 
 // secretValue returns a secret given directly or in a file. Trailing

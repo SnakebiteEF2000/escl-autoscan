@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -66,10 +67,32 @@ type Server struct {
 	requests []Request
 	relative bool // answer with a relative Location
 	onCreate func(*Server, *Job)
+	script   func(settings string) []Step
 }
 
 // New starts a fake scanner that is Idle with an empty feeder.
 func New(t testing.TB) *Server {
+	s := newServer()
+	s.StartTLS()
+	t.Cleanup(s.Close)
+	return s
+}
+
+// Listen starts a fake scanner on addr, for use outside of tests (see the
+// simulator command).
+func Listen(addr string) (*Server, error) {
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	s := newServer()
+	s.Listener.Close()
+	s.Listener = l
+	s.StartTLS()
+	return s, nil
+}
+
+func newServer() *Server {
 	s := &Server{state: "Idle", adf: "ScannerAdfEmpty"}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /eSCL/ScannerStatus", s.handleStatus)
@@ -93,8 +116,6 @@ func New(t testing.TB) *Server {
 	}))
 	// Silence "TLS handshake error" logs from fingerprint tests.
 	s.Server.Config.ErrorLog = log.New(io.Discard, "", 0)
-	s.StartTLS()
-	t.Cleanup(s.Close)
 	return s
 }
 
@@ -127,6 +148,15 @@ func (s *Server) QueueJob(steps ...Step) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.scripts = append(s.scripts, steps)
+}
+
+// Script registers a function that supplies the NextDocument answers of
+// every new job from its scan settings (the request body). It replaces the
+// QueueJob queue, and it may call SetStatus.
+func (s *Server) Script(f func(settings string) []Step) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.script = f
 }
 
 // RelativeLocation makes the fake answer job creation with a relative
@@ -198,11 +228,16 @@ func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	job := &Job{UUID: fmt.Sprintf("00000000-0000-4000-8000-%012d", len(s.jobs)+1), Settings: string(body)}
-	if len(s.scripts) > 0 {
-		job.steps = s.scripts[0]
+	var steps []Step
+	if script := s.script; script != nil {
+		s.mu.Unlock()
+		steps = script(string(body)) // may call SetStatus
+		s.mu.Lock()
+	} else if len(s.scripts) > 0 {
+		steps = s.scripts[0]
 		s.scripts = s.scripts[1:]
 	}
+	job := &Job{UUID: fmt.Sprintf("00000000-0000-4000-8000-%012d", len(s.jobs)+1), Settings: string(body), steps: steps}
 	s.jobs = append(s.jobs, job)
 	loc := "/eSCL/ScanJobs/" + job.UUID
 	if !s.relative {

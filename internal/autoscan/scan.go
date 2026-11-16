@@ -12,7 +12,8 @@ import (
 )
 
 // scan runs one scan job end to end and delivers or rejects the result.
-func (s *Service) scan(ctx context.Context, source escl.InputSource, colorMode string) Record {
+// pass is the role of the scan in a double-sided run.
+func (s *Service) scan(ctx context.Context, source escl.InputSource, colorMode string, pass int) Record {
 	rec := Record{Time: s.now(), Source: sourceLabel(source), Color: colorMode}
 	settings := escl.ScanSettings{
 		Source: source, Intent: s.cfg.Intent, ColorMode: colorMode,
@@ -28,6 +29,7 @@ func (s *Service) scan(ctx context.Context, source escl.InputSource, colorMode s
 		if !s.cfg.WakeWorkaround {
 			rec.Result, rec.Message = metrics.ResultWakeGlitch, "no document although paper is loaded (scanner wake bug)"
 			rec.Duration = s.now().Sub(rec.Time)
+			s.passFailed(pass, &rec)
 			return rec
 		}
 		s.m.Scan(rec.Source, metrics.ResultWakeGlitch, 0, 0, rec.Time)
@@ -54,27 +56,32 @@ func (s *Service) scan(ctx context.Context, source escl.InputSource, colorMode s
 		rec.Message = joinMsg(rec.Message, msg)
 	}
 
-	if result == metrics.ResultOK {
-		out, routed := s.deliveryTarget(source, len(docs))
-		prefix := ""
-		if routed {
-			prefix = s.cfg.DoubleSidedSubdir + "/"
-		}
-		for _, doc := range docs {
-			name, err := out.Write(doc, rec.Time, "")
-			if err != nil {
-				rec.Result, rec.Message = metrics.ResultError, joinMsg(rec.Message, "write: "+err.Error())
-				break
-			}
-			rec.Files = append(rec.Files, prefix+name)
-		}
-		rec.DoubleSided = routed && rec.Result == metrics.ResultOK
-		if rec.Result == metrics.ResultOK {
-			return rec
-		}
+	// Each of these may still turn the result into an error.
+	switch {
+	case result != metrics.ResultOK:
+		s.passFailed(pass, &rec)
+	case pass == DoubleSidedWaiting && source == escl.Feeder:
+		s.holdFronts(&rec, docs)
+	case pass == DoubleSidedBacks:
+		s.collateBacks(&rec, docs)
+	case pass == DoubleSidedWaiting, pass == DoubleSidedFlatbed:
+		s.holdPage(&rec, docs)
+	default:
+		s.deliver(&rec, docs)
 	}
-	s.reject(&rec, docs)
+	if rec.Result != metrics.ResultOK {
+		s.reject(&rec, docs)
+	}
 	return rec
+}
+
+// deliver writes the documents of a successful scan to OUTPUT_DIR.
+func (s *Service) deliver(rec *Record, docs [][]byte) {
+	files, err := s.write(s.out, docs, rec.Time, "")
+	rec.Files = append(rec.Files, files...)
+	if err != nil {
+		rec.Result, rec.Message = metrics.ResultError, joinMsg(rec.Message, "write: "+err.Error())
+	}
 }
 
 // runJob creates a job and fetches its documents. It returns the documents

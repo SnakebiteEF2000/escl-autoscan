@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -57,7 +56,6 @@ type Config struct {
 	DeleteTimeout time.Duration // bound for the best-effort DELETE after a job
 	HistorySize   int
 
-	DoubleSidedSubdir  string        // DOUBLE_SIDED_SUBDIR below the output dir; empty: disabled
 	DoubleSidedTimeout time.Duration // DOUBLE_SIDED_TIMEOUT
 
 	Now func() time.Time // clock; time.Now when nil (tests)
@@ -99,7 +97,6 @@ type Service struct {
 	dev    *escl.Client
 	out    *output.Writer
 	failed *output.Writer // nil: rejected scans are discarded
-	dsOut  *output.Writer // double-sided folder; nil: disabled
 	m      *metrics.Metrics
 	log    *slog.Logger
 	now    func() time.Time
@@ -109,7 +106,8 @@ type Service struct {
 	jobCtx    context.Context
 	jobCancel context.CancelFunc
 	wg        sync.WaitGroup
-	described bool // capabilities logged; Run goroutine only
+	described bool          // capabilities logged; Run goroutine only
+	pollNow   chan struct{} // asks Run for a status poll at once
 
 	mu       sync.Mutex // guards everything below; it also serializes scans
 	status   statusView
@@ -122,7 +120,8 @@ type Service struct {
 
 	ds         int // DoubleSidedOff, ...Fronts, ...Backs
 	dsDeadline time.Time
-	dsNote     string // why the last double-sided run ended early
+	dsNote     Note       // what happened last in double-sided mode
+	dsHeld     *heldPages // the fronts in DoubleSidedBacks, the pages so far in DoubleSidedFlatbed
 	failures   int
 	lastState  [2]string
 }
@@ -142,6 +141,12 @@ type Current struct {
 	Trigger string // "auto" or "manual"
 	Color   string
 	Started time.Time
+	// Pass is the role of the scan in a double-sided run, the state the run
+	// was in when the scan started: DoubleSidedWaiting for the first scan
+	// (the fronts from the feeder, or the first flatbed page),
+	// DoubleSidedBacks, DoubleSidedFlatbed, or DoubleSidedOff for a normal
+	// scan.
+	Pass int
 }
 
 // Record is one entry of the scan history.
@@ -155,8 +160,9 @@ type Record struct {
 	Files    []string
 	Message  string
 	Duration time.Duration
-	// DoubleSided is set when the scan was delivered as one pass of a
-	// double-sided pair.
+	// DoubleSided is set when the scan became part of a document made of
+	// several scans: fronts or flatbed pages that are held, or backs
+	// collated with their fronts.
 	DoubleSided bool
 }
 
@@ -173,14 +179,15 @@ type Snapshot struct {
 	Armed           bool
 	Paused          bool
 	Settling        bool
+	Settle          time.Duration // delay between detecting paper and scanning
 	Scanning        *Current
-	ColorMode       string
+	ColorMode       string   // preselected: SCAN_COLOR_MODE, or the mode of the scans held for a double-sided document
 	History         []Record // newest first
 
-	DoubleSidedEnabled  bool
-	DoubleSided         int       // DoubleSidedOff, ...Fronts, ...Backs
+	DoubleSided         int       // DoubleSidedOff, ...Waiting, ...Backs, ...Flatbed
 	DoubleSidedDeadline time.Time // when the current step expires
-	DoubleSidedNote     string
+	DoubleSidedHeld     int       // pages held: the fronts, or the flatbed pages so far
+	DoubleSidedNote     Note
 }
 
 // New creates a service. failed may be nil.
@@ -189,11 +196,8 @@ func New(cfg Config, dev *escl.Client, out, failed *output.Writer, m *metrics.Me
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{
 		cfg: cfg, dev: dev, out: out, failed: failed, m: m, log: log, now: cfg.Now,
-		jobCtx: ctx, jobCancel: cancel,
+		jobCtx: ctx, jobCancel: cancel, pollNow: make(chan struct{}, 1),
 		paused: cfg.Paused,
-	}
-	if cfg.DoubleSidedSubdir != "" {
-		s.dsOut = &output.Writer{Dir: filepath.Join(out.Dir, cfg.DoubleSidedSubdir), Location: out.Location, Log: out.Log}
 	}
 	m.SetPaused(s.paused)
 	m.SetArmed(false)
@@ -205,16 +209,23 @@ func New(cfg Config, dev *escl.Client, out, failed *output.Writer, m *metrics.Me
 func (s *Service) Snapshot() Snapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.expireDoubleSided()
 	snap := Snapshot{
 		Reachable: s.status.reachable, State: s.status.state, AdfState: s.status.adf,
 		Model: s.status.model, LastPoll: s.status.polled, LastError: s.status.err,
 		AutoscanEnabled: s.cfg.Enabled, Armed: s.armed, Paused: s.paused, Settling: s.settling,
-		ColorMode: s.cfg.ColorMode,
-		History:   make([]Record, len(s.history)),
+		Settle: s.cfg.Settle, ColorMode: s.cfg.ColorMode,
+		History: make([]Record, len(s.history)),
 
-		DoubleSidedEnabled: s.dsOut != nil, DoubleSided: s.ds,
-		DoubleSidedDeadline: s.dsDeadline, DoubleSidedNote: s.dsNote,
+		DoubleSided: s.ds, DoubleSidedDeadline: s.dsDeadline, DoubleSidedNote: s.dsNote,
+	}
+	if s.dsHeld != nil {
+		snap.DoubleSidedHeld = s.dsHeld.pages
+		snap.ColorMode = s.dsHeld.color
+	}
+	if s.scanning != nil && s.scanning.Pass != DoubleSidedOff {
+		// The page is loaded again right after a scan was started, while
+		// it runs: preselect what was just chosen.
+		snap.ColorMode = s.scanning.Color
 	}
 	if s.scanning != nil {
 		cur := *s.scanning
@@ -256,6 +267,7 @@ func (s *Service) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-poll.C:
+			s.expireDoubleSided()
 			next, startSettle := s.poll(ctx)
 			if startSettle {
 				settle = time.NewTimer(s.cfg.Settle)
@@ -265,6 +277,8 @@ func (s *Service) Run(ctx context.Context) {
 		case <-settleC:
 			settleC = nil
 			s.settled(ctx)
+			poll.Reset(0)
+		case <-s.pollNow:
 			poll.Reset(0)
 		}
 	}
@@ -300,7 +314,6 @@ func (s *Service) poll(ctx context.Context) (time.Duration, bool) {
 		s.log.Info("scanner reachable again", "state", st.State, "adf", st.AdfState)
 	}
 	s.failures = 0
-	s.expireDoubleSided()
 	s.status.reachable, s.status.state, s.status.adf, s.status.err = true, st.State, st.AdfState, ""
 	s.m.SetUp(true)
 	s.m.SetAdfState(st.AdfState)
@@ -393,7 +406,7 @@ func (s *Service) settled(ctx context.Context) {
 		reason = "scanner " + st.State
 	}
 	if reason == "" {
-		err = s.start(escl.Feeder, s.cfg.ColorMode, "auto")
+		err = s.start(escl.Feeder, "", "auto")
 		if err == nil {
 			return
 		}
@@ -411,11 +424,8 @@ func (s *Service) settled(ctx context.Context) {
 }
 
 // Scan starts a manual scan in the background. It returns ErrBusy while
-// another scan runs.
+// another scan runs. An empty colorMode means the default.
 func (s *Service) Scan(source escl.InputSource, colorMode string) error {
-	if colorMode == "" {
-		colorMode = s.cfg.ColorMode
-	}
 	return s.start(source, colorMode, "manual")
 }
 
@@ -428,26 +438,52 @@ func (s *Service) start(source escl.InputSource, colorMode, trigger string) erro
 	if s.scanning != nil {
 		return ErrBusy
 	}
-	cur := &Current{Source: sourceLabel(source), Trigger: trigger, Color: colorMode, Started: s.now()}
-	s.scanning = cur
+	cur := &Current{Source: sourceLabel(source), Trigger: trigger, Started: s.now()}
 	if source == escl.Feeder {
 		// Whatever happens, this stack is done; wait for an empty feeder.
 		s.setArmed(false, "scan started")
 	}
+	switch {
+	case s.ds == DoubleSidedWaiting, // the first scan decides what the run is
+		s.ds == DoubleSidedBacks && source == escl.Feeder,
+		s.ds == DoubleSidedFlatbed && source == escl.Platen:
+		cur.Pass = s.ds
+	}
+	// The default color mode is SCAN_COLOR_MODE; within a double-sided run
+	// it is the mode of the scans before, so that the backs match the fronts.
+	switch {
+	case colorMode != "":
+	case cur.Pass != DoubleSidedOff && s.dsHeld != nil:
+		colorMode = s.dsHeld.color
+	default:
+		colorMode = s.cfg.ColorMode
+	}
+	cur.Color = colorMode
+	if cur.Pass != DoubleSidedOff || s.ds == DoubleSidedOff {
+		s.dsNote = Note{} // it was about an earlier scan
+	}
+	s.scanning = cur
+	pass := cur.Pass
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		rec := s.scan(s.jobCtx, source, colorMode)
+		rec := s.scan(s.jobCtx, source, colorMode, pass)
 		rec.Trigger = trigger
-		s.doubleSidedDone(source, rec.Result, rec.DoubleSided)
 		s.mu.Lock()
 		s.scanning = nil
 		s.mu.Unlock()
 		s.record(rec, rec.Duration)
+		// The last status is from the middle of the scan. Poll again at
+		// once: the UI is current, and an empty feeder re-arms autoscan.
+		select {
+		case s.pollNow <- struct{}{}:
+		default:
+		}
 	}()
 	return nil
 }
 
+// record counts a finished scan, logs it and puts it into the history.
 func (s *Service) record(r Record, d time.Duration) {
 	s.m.Scan(r.Source, r.Result, r.Pages, d, r.Time)
 	attrs := []any{"source", r.Source, "trigger", r.Trigger, "result", r.Result, "pages", r.Pages,
@@ -461,6 +497,11 @@ func (s *Service) record(r Record, d time.Duration) {
 	default:
 		s.log.Warn("scan failed", attrs...)
 	}
+	s.remember(r)
+}
+
+// remember puts an entry into the history shown in the UI.
+func (s *Service) remember(r Record) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.history = append(s.history, r)
@@ -471,7 +512,9 @@ func (s *Service) record(r Record, d time.Duration) {
 
 // Shutdown stops starting new scans and waits up to timeout for a running
 // scan. After that the job is cancelled, which deletes it on the device.
+// What is held for a double-sided document is saved.
 func (s *Service) Shutdown(timeout time.Duration) {
+	defer s.saveHeldAtShutdown()
 	s.mu.Lock()
 	s.stopping = true
 	running := s.scanning != nil
